@@ -1,5 +1,12 @@
 # depslib dependency file v1.0
-1469499392 source:/home/juande/Documentos/CodeBlocks/MIA_Proyecto_201314412/main.c
+1469509134 source:/home/juande/Documentos/CodeBlocks/MIA_Proyecto_201314412/main.c
 	<stdio.h>
 	<stdlib.h>
+	<string.h>
+	<time.h>
+	<assert.h>
+	<dirent.h>
+	<stdbool.h>
+	<unistd.h>
+	<sys/stat.h>
 
