@@ -14,6 +14,32 @@ typedef struct { //ESTRUCTURA DE LOS COMANDOS
     char comando [100];
 } Comando;
 
+typedef struct {
+    char part_status; //indica si esta activa o no
+    char part_type; //indica si es primaria o extendida [P o E]
+    char part_fit; //Tipo de ajuste de la particion [B(best),F(first),W(worst)]
+    int part_start; //indica en que byte del disco inicia la particion
+    int part_size; //Contiene el tamaño total de la particion
+    char part_name[16]; //Nombre de la particion
+
+
+} struct_particion;
+
+typedef struct {
+    char mbr_fecha_creacion[16]; //Fecha y hora de creación del disco
+    int mbr_tamano; //tamaño total del disco en bytes
+    int mbr_disk_signature; //numero random que identifica de forma unica cada disco
+    struct_particion mbr_particiones[4]; //info de la particion 1
+} struct_mbr; //TAMAÑO 136 BYTES
+
+typedef struct {
+    char part_status; //Inidica si la particion esta activa o no
+    char part_fit; //Tipo de ajuste de la particion [B(best),F(first),W(worst)]
+    int part_start; //Indica en que byte del disco inicia la particion
+    int part_size; //Contiene el tamaño total de la particion en bytes
+    int part_next; //byte que esta el proximo EBR, -1 si no hay
+    char part_name[16]; //Nombre de la particion
+} struct_ebr; //TAMAÑO 32 BYTES
 //**************VARS GLOBALES************
 Comando Comandos[20];
 
@@ -21,8 +47,10 @@ Comando Comandos[20];
 void Mkdisk(Comando comando[]); //METODO PARA CREAR DISCOS
 void VerificarPath(char Path[]); //Verificar si una path existe o sino crearla
 void CrearDisco(char cadena[], char unit[],char name[], int size); //Metodo donde se crea el disco
+void Rmdisk(Comando comando[]); //METODO PARA ELIMINAR DISCOS
 
 //PROTOTIPOS AUXILIARES
+int ContarSlash(char path[]);
 void cambio(char aux[]);
 void limpiarvar(char aux[], int n);
 char** SplitComando(char* texto, const char caracter_delimitador);
@@ -112,7 +140,7 @@ int main()
             Mkdisk(Comandos);
         } else if (strcasecmp(Comandos[0].comando, "rmdisk") == 0) {
             printf("ELIMINACION DE DISCO DURO \n");
-            //Rmdisk(Comandos);
+            Rmdisk(Comandos);
         } else if (strcasecmp(Comandos[0].comando, "fdisk") == 0) {
             printf("EDICION DE PARTICIONES \n");
             //Fdisk(Comandos);
@@ -155,7 +183,7 @@ void Mkdisk(Comando comando[]){ //METODO PARA CREAR DISCOS
     bool existepath = false;
     bool existename = false;
     bool error = false;
-    int i = 0;
+    int i = 1;
     while (strcasecmp(comando[i].comando, "vacio") != 0){
         if (strcasecmp(comando[i].comando, "-size") == 0){
             i++;
@@ -179,12 +207,14 @@ void Mkdisk(Comando comando[]){ //METODO PARA CREAR DISCOS
             strcpy(path, comando[i].comando);
             if (path[0] == '\"') {
                 int a;
-                for (a = i + 2; a < 25; a++) {
+                for (a = i + 1; a < 25; a++) {
                     if (strcasecmp(comando[a].comando, "-size") != 0 && strcasecmp(comando[a].comando, "+unit") != 0 && strcasecmp(comando[a].comando, "-name") != 0 && strcasecmp(comando[a].comando, "vacio") != 0 && strcasecmp(comando[a].comando, "\\") != 0) {
                         strcat(path, " ");
                         strcat(path, comando[a].comando);
                     } else {
+                        i = a - 1;
                         a = 25;
+
                     }
                 }
 
@@ -195,11 +225,12 @@ void Mkdisk(Comando comando[]){ //METODO PARA CREAR DISCOS
             strcpy(name, comando[i].comando);
             if (name[0] == '\"') {
                 int a;
-                for (a = i + 2; a < 25; a++) {
+                for (a = i + 1; a < 25; a++) {
                     if (strcasecmp(comando[a].comando, "-size") != 0 && strcasecmp(comando[a].comando, "+unit") != 0 && strcasecmp(comando[a].comando, "-path") != 0 && strcasecmp(comando[a].comando, "vacio") != 0 && strcasecmp(comando[a].comando, "\\") != 0) {
                         strcat(name, " ");
                         strcat(name, comando[a].comando);
                     } else {
+                        i = a - 1;
                         a = 25;
                     }
                 }
@@ -217,8 +248,8 @@ void Mkdisk(Comando comando[]){ //METODO PARA CREAR DISCOS
         printf("FALTAN PARAMETROS PARA COMPLETAR EL PROCESO DE CREACION DE DISCOS (SIZE|PATH|NAME) \n\n");
     }else{
         if (error == false) {
-            //VerificarPath(path);
-            //CrearDisco(path, unit, size);
+            VerificarPath(path);
+            CrearDisco(path, unit,name, size);
         } else {
             printf("EL COMANDO CONTIENE ERRORES \n");
         }
@@ -233,13 +264,25 @@ void VerificarPath(char Path[]){
     strcpy(path, Path);
     char** carpetas;
     char auxiliar[200] = "";
+    char pathauxiliar[200];
+    limpiarvar(pathauxiliar,200);
     if (path[0] == '\"'){ //La path trae espacios en blanco
-        carpetas = SplitComando(path, '/'); //separar la path por cada directorio
+        int esp;
+        int pos = 0;
+        for(esp = 1; esp<200;esp++){
+            if(path[esp] == '\"'){
+                esp = 200;
+            }else{
+                pathauxiliar[pos] = path[esp];
+                pos++;
+            }
+        }
+        carpetas = SplitComando(pathauxiliar, '/'); //separar la path por cada directorio
         if (carpetas) //si la lista no esta vacia
         {
             int i;
             //for (i = 0; *(carpetas + i) ; i++)
-            for (i = 1; i < slash; i++) {
+            for (i = 0; i < slash; i++) {
                 strcat(auxiliar, "/");
                 strcat(auxiliar, *(carpetas + i));
                 //printf("%s \n",auxiliar);
@@ -256,7 +299,7 @@ void VerificarPath(char Path[]){
         {
             int i;
             //for (i = 0; *(carpetas + i) ; i++)
-            for (i = 0; i < slash - 1; i++) {
+            for (i = 0; i < slash; i++) {
                 strcat(auxiliar, "/");
                 strcat(auxiliar, *(carpetas + i));
                 //printf("%s \n",auxiliar);
@@ -275,6 +318,22 @@ void VerificarPath(char Path[]){
 void CrearDisco(char cadena[], char unit[],char name[], int size){
     char auxcadena[200];
     limpiarvar(auxcadena, 200);
+    char auxnombre[50];
+    limpiarvar(auxnombre,50);
+    if (name[0] == '\"') {
+        int x;
+        int y = 0;
+        for (x = 1; x < 50; x++) {
+            if (name[x] == '\"') {
+                x = 50;
+            } else {
+                auxnombre[y] = name[x];
+                y++;
+            }
+        }
+    } else {
+        strcpy(auxnombre, name);
+    }
     if (cadena[0] == '\"') {
         int x;
         int y = 0;
@@ -290,8 +349,142 @@ void CrearDisco(char cadena[], char unit[],char name[], int size){
         strcpy(auxcadena, cadena);
     }
     strcpy(cadena, auxcadena);
+    strcat(cadena,"/");
+    strcat(cadena,auxnombre);
+    int espaciorestante; //Variable para obtener el espacio restante en el disco despues de escribir el mbr
+    int cont;
+    int tamanodeldisco = size;
+    FILE *disco;
+    struct_mbr mbr;
+    struct_particion particion;
+    particion.part_status = '0';
+    particion.part_type = 'N';
+    particion.part_fit = 'N';
+    particion.part_start = 0;
+    particion.part_size = 0;
+    strcpy(particion.part_name, "\0");
+    for (cont = 0; cont < 4; cont++) {
+        mbr.mbr_particiones[cont] = particion;
+    }
+    int tamanombr = sizeof (struct_mbr); //el mbr ocupa 136bytes
+    mbr.mbr_disk_signature = (rand() % 10);
+    time_t hora = time(0);
+    struct tm *tlocal = localtime(&hora);
+    strftime(mbr.mbr_fecha_creacion, 16, "%d/%m/%y %H:%S", tlocal);
+    disco = fopen(cadena, "rb+");
+    if (disco == NULL) {
+        if (strcasecmp(unit, "m") == 0) {
+            espaciorestante = (size * 1024 * 1024) - sizeof (mbr);
+            tamanodeldisco = tamanodeldisco * 1024 * 1024;
+            /*for(cont = 0; cont<(size*1024*1024);cont++){
+                fwrite("\0",sizeof(char),1,disco);
+            }*/
+        } else if (strcasecmp(unit, "k") == 0) {
+            espaciorestante = (size * 1024) - sizeof (mbr);
+            tamanodeldisco = tamanodeldisco * 1024;
+            /*for(cont = 0; cont<(size*1024);cont++){
+                fwrite("\0",sizeof(char),1,disco);
+            }*/
+        }
+        disco = fopen(cadena, "wb");
+        mbr.mbr_tamano = tamanodeldisco;
+        fwrite(&mbr, sizeof (mbr), 1, disco);
+        fseek(disco, sizeof (mbr) + 1, SEEK_SET);
+        char relleno = '\0'; //variable con la que se va a rellenar el disco duro
+        for (cont = 0; cont < espaciorestante - 1; cont++) {
+            fwrite(&relleno, 1, 1, disco);
+        }
+        rewind(disco); //Regresa el puntero al inicio del archivo
+        printf("Se creo un disco \n");
+        printf("Tamaño: %i bytes \n", tamanodeldisco);
+        printf("Ruta: %s \n\n", cadena);
+    }else{
+        printf("El disco ya existe\n");
+    }
+    fclose(disco);
 }
 
+void Rmdisk(Comando comando[]){ //METODO PARA ELIMINAR DISCOS
+    char resp[5]; //variable que almacena
+    limpiarvar(resp, 5);
+    char path[200];
+    limpiarvar(path, 200);
+    char pathaux[200];
+    limpiarvar(pathaux, 200);
+    int cont = 0;
+    //bool para verificar si existe parametro obligatorio
+    bool existepath = false;
+    while (strcasecmp(comando[cont].comando, "vacio") != 0) {
+        if (strcasecmp(comando[cont].comando, "-path") == 0) {
+            strcpy(pathaux, comando[cont + 1].comando);
+            if (pathaux[0] == '\"') {
+                int a;
+                for (a = cont + 2; a < 25; a++) {
+                    if (strcasecmp(comando[a].comando, "-size") != 0 && strcasecmp(comando[a].comando, "-unit") != 0 && strcasecmp(comando[a].comando, "vacio") != 0) {
+                        strcat(pathaux, " ");
+                        strcat(pathaux, comando[a].comando);
+                    } else {
+                        a = 25;
+                    }
+                }
+            }
+            existepath = true;
+        }
+        cont++;
+    }
+    if (pathaux[0] == '\"') {
+        int x;
+        int y = 0;
+        for (x = 1; x < 200; x++) {
+            if (pathaux[x] == '\"') {
+                x = 200;
+            } else {
+                path[y] = pathaux[x];
+                y++;
+            }
+        }
+    } else {
+        strcpy(path, pathaux);
+    }
+
+if (existepath == true) {
+        FILE *archivo;
+        archivo = fopen(path, "rb");
+        if (archivo == NULL) {
+            printf("El disco no existe \n\n");
+        } else {
+            printf("Esta seguro que desea eliminar esta unidad: [Y/N] \n");
+            fgets(resp, 5, stdin);
+            cambio(resp);
+            if (strcasecmp(resp, "y") == 0) {
+                if (remove(path) == 0) {
+                    printf("El disco ha sido eliminado de forma exitosa \n\n");
+                } else {
+                    printf("Error al tratar de eliminar disco \n\n");
+                }
+            } else {
+
+                printf("Eliminacion cancelada \n\n");
+            }
+            fclose(archivo);
+        }
+    } else {
+        printf("Error, parametros faltantes [path] o incorrectos \n\n ");
+    }
+}
+
+int ContarSlash(char path[]) {
+    char *tampath = "";
+    int cantidad = 0;
+    while (*path) {
+        if (*path == '/') {
+
+            cantidad++;
+        }
+        path++;
+    }
+    return cantidad;
+}
 
 void cambio(char aux[]) {//METODO PARA ELIMINAR EL SALTO DE LINEA EN LOS COMANDOS
     int i, temp = 0;
