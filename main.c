@@ -66,12 +66,14 @@ void Rmdisk(Comando comando[]); //METODO PARA ELIMINAR DISCOS
 void Fdisk(Comando comando[]); //METODO PARA MODIFICAR PARTICIONES
 void CrearParticion(char path[], int size, char unit[], char type[], char fit[], char Name[]); //METODO DONDE SE CREAN LAS PARTICIONES
 void EliminarParticion(char path[], char deletev[], char name[]); //METODO DONDE SE ELIMINAN LAS PARTICIONES
+void ModificarParticion(char path[], char unit[], int add, char name[]); //METODO DONDE SE MODIFICAN LAS PARTICIONES
 void Mount(Comando comando[]); //METODO DONDE SE MONTA
 void Umount(Comando comando[]); //METODO DONDE SE DESMONTA
 void Reporte(Comando comando[]); //METODO DONDE SE GENERAN LOS REPORTES
 void VerificarPathReporte(char Path[]); //Verificar si una path existe o sino crearla
 void GenerarReporteMBR(char disco[], char archivosalida[]); //REPORTE DE MBR
 void GenerarReporteDisk(char nombreArchivo[], char nombreSalida[]); //REPORTE DE DISCO
+void Exec(Comando comando[]); //METODO DONDE SE LEE EL ARCHIVO PARA EJECUTAR LAS INSTRUCCIONES EN OTRO METODO
 
 //PROTOTIPOS AUXILIARES
 int ContarSlash(char path[]);
@@ -184,7 +186,9 @@ int main(){
         } else if (strcasecmp(Comandos[0].comando, "rep") == 0) {
             printf("REPORTES \n");
             Reporte(Comandos);
-        } else if (strcasecmp(Comandos[0].comando, "clear") == 0) {
+        } else if (strcasecmp(Comandos[0].comando, "exec") == 0) {
+            Exec(Comandos);
+        }else if (strcasecmp(Comandos[0].comando, "clear") == 0) {
             system("clear");
             printf("PROYECTO MANEJO E IMPLEMENTACION DE ARCHIVOS \n");
             printf("SECCION A\n");
@@ -837,7 +841,7 @@ void Fdisk(Comando comando[]) {
                     if (disco != NULL) {
                         fread(&mbr, sizeof (mbr), 1, disco);
                         printf("Fue creado: %s \n", mbr.mbr_fecha_creacion);
-                        //ModificarParticion(path, unit, add, name);
+                        ModificarParticion(path, unit, add, name);
                     } else {
                         printf("No existe el disco \n");
                     }
@@ -1487,7 +1491,343 @@ void EliminarParticion(char path[], char deletev[], char name[]) { //METODO DOND
     }
 }
 
-/*FALTA MODIFICAR PARTICION*/
+void ModificarParticion(char path[], char unit[], int add, char name[]){ //METODO DONDE SE MODIFICAN LAS PARTICIONES
+    int addaux = add;
+    int tamanoreal; //Variable para tamaño real que se agregara o quitara a la particion
+    int cantPrimarias; //numero de particiones primarias
+    int cantExtendidas; //numero de particiones extendidas
+    int totalParticiones; //numero total de particiones
+
+    /**************************/
+    /*CONVERSION DE VARIABLES*/
+    /*************************/
+    if (strcasecmp(unit, "b") == 0) {
+        tamanoreal = addaux;
+    } else if (strcasecmp(unit, "k") == 0) {
+        tamanoreal = addaux * 1024;
+    } else if (strcasecmp(unit, "m") == 0) {
+        tamanoreal = addaux * 1024 * 1024;
+    }
+
+    FILE *disco;
+    disco = fopen(path, "rb+");
+    struct_mbr mbr;
+    if (disco != NULL) {
+        fread(&mbr, sizeof (struct_mbr), 1, disco);
+        cantPrimarias = CantidadParticionesPrimarias(mbr);
+        cantExtendidas = CantidadParticionesExtendidas(mbr);
+        totalParticiones = cantExtendidas + cantPrimarias;
+        struct_particion vecparticiones[totalParticiones];
+        int j, p, cont = 0;
+        if (totalParticiones < 4) {
+            for (j = 0; j < 3; j++) { //Verificando que particiones existen y almacenandolas en un vector
+                if (mbr.mbr_particiones[j].part_start > 0 && mbr.mbr_particiones[j].part_status != '0') {
+                    vecparticiones[cont] = mbr.mbr_particiones[j];
+                    cont++;
+                }
+            }
+        } else if (totalParticiones == 4) {
+            for (j = 0; j < 4; j++) { //Verificando que particiones existen y almacenandolas en un vector
+                if (mbr.mbr_particiones[j].part_start > 0 && mbr.mbr_particiones[j].part_status != '0') {
+                    vecparticiones[cont] = mbr.mbr_particiones[j];
+                    cont++;
+                }
+            }
+        }
+        /**************************************/
+        /*ORDENANDO EL VECTOR POR BURBUJA******/
+        /*************************************/
+        if (totalParticiones > 1) {
+            for (j = 0; j < totalParticiones; j++) {
+                for (p = 0; p < totalParticiones - 1; p++) {
+                    if (vecparticiones[p].part_start > vecparticiones[p + 1].part_start) {
+                        struct_particion aux = vecparticiones[p];
+                        vecparticiones[p] = vecparticiones[p + 1];
+                        vecparticiones[p + 1] = aux;
+                    }
+                }
+            }
+        }
+        bool encontro = false;
+        int h;
+        int espaciolibre;
+        for (h = 0; h < totalParticiones; h++) {
+            if (strcasecmp(vecparticiones[h].part_name, name) == 0) {
+                encontro = true;
+                if (totalParticiones == 1) {
+                    //Si solo hay una particion en el disco
+                    if (tamanoreal > 0) {
+                        //Se quiere agregar espacio
+                        espaciolibre = mbr.mbr_tamano - (vecparticiones[h].part_start + vecparticiones[h].part_size + 1);
+                        if (tamanoreal < espaciolibre) {
+                            vecparticiones[h].part_size = vecparticiones[h].part_size + tamanoreal;
+                            for (j = 0; j < 4; j++) {
+                                if (strcasecmp(vecparticiones[h].part_name, mbr.mbr_particiones[j].part_name) == 0) {
+                                    mbr.mbr_particiones[j] = vecparticiones[h];
+
+                                }
+                            }
+                            /***************************************/
+                            /******ESCRIBIENDO DE NUEVO EL MBR******/
+                            /***************************************/
+                            fseek(disco, 0L, SEEK_SET);
+                            fwrite(&mbr, sizeof (struct_mbr), 1, disco);
+                            //fclose(disco);
+                            printf("Se quito agrego exitosamente \n");
+                        } else {
+                            printf("No se puede agregar espacio debido a que sobrepasa el espacio libre del disco \n");
+                        }
+                    } else {
+                        //se quiere quitar espacio
+                        if (vecparticiones[h].part_size + tamanoreal > 0 &&  vecparticiones[h].part_size + tamanoreal >= 2097152) {
+                            vecparticiones[h].part_size = vecparticiones[h].part_size + tamanoreal;
+                            for (j = 0; j < 4; j++) {
+                                if (strcasecmp(vecparticiones[h].part_name, mbr.mbr_particiones[j].part_name) == 0) {
+                                    mbr.mbr_particiones[j] = vecparticiones[h];
+
+                                }
+                            }
+                            /***************************************/
+                            /******ESCRIBIENDO DE NUEVO EL MBR******/
+                            /***************************************/
+                            fseek(disco, 0L, SEEK_SET);
+                            fwrite(&mbr, sizeof (struct_mbr), 1, disco);
+                            //fclose(disco);
+                            printf("Se quito espacio exitosamente \n");
+
+                        } else {
+                            printf("No se puede quitar espacio debido a que no cumple con el minimo de una particion \n");
+                        }
+                    }
+                } else {
+                    //SI HAY MAS DE UNA PARTICION
+                    if (h == totalParticiones - 1) {
+                        //la ultima particion del disco
+                        if (tamanoreal > 0) {
+                            //Se quiere agregar espacio
+                            espaciolibre = mbr.mbr_tamano - (vecparticiones[h].part_start + vecparticiones[h].part_size + 1);
+                            if (tamanoreal < espaciolibre) {
+                                vecparticiones[h].part_size = vecparticiones[h].part_size + tamanoreal;
+                                for (j = 0; j < 4; j++) {
+                                    if (strcasecmp(vecparticiones[h].part_name, mbr.mbr_particiones[j].part_name) == 0) {
+                                        mbr.mbr_particiones[j] = vecparticiones[h];
+
+                                    }
+                                }
+                                /***************************************/
+                                /******ESCRIBIENDO DE NUEVO EL MBR******/
+                                /***************************************/
+                                fseek(disco, 0L, SEEK_SET);
+                                fwrite(&mbr, sizeof (struct_mbr), 1, disco);
+                                //fclose(disco);
+                                printf("Se quito agrego exitosamente \n");
+                            } else {
+                                printf("No se puede agregar espacio debido a que sobrepasa el espacio libre del disco \n");
+                            }
+                        } else {
+                            //se quiere quitar espacio
+                            if (vecparticiones[h].part_size + tamanoreal > 0 &&  vecparticiones[h].part_size + tamanoreal >= 2097152) {
+                                vecparticiones[h].part_size = vecparticiones[h].part_size + tamanoreal;
+                                for (j = 0; j < 4; j++) {
+                                    if (strcasecmp(vecparticiones[h].part_name, mbr.mbr_particiones[j].part_name) == 0) {
+                                        mbr.mbr_particiones[j] = vecparticiones[h];
+
+                                    }
+                                }
+                                /***************************************/
+                                /******ESCRIBIENDO DE NUEVO EL MBR******/
+                                /***************************************/
+                                fseek(disco, 0L, SEEK_SET);
+                                fwrite(&mbr, sizeof (struct_mbr), 1, disco);
+                                //fclose(disco);
+                                printf("Se quito espacio exitosamente \n");
+
+                            } else {
+                                printf("No se puede quitar espacio debido a que no cumple con el minimo de una particion \n");
+                            }
+                        }
+                    } else {
+                        if (tamanoreal > 0) {
+                            //Se quiere agregar espacio
+                            espaciolibre = vecparticiones[h + 1].part_start - (vecparticiones[h].part_start + vecparticiones[h].part_size + 1);
+                            if (tamanoreal < espaciolibre) {
+                                vecparticiones[h].part_size = vecparticiones[h].part_size + tamanoreal;
+                                for (j = 0; j < 4; j++) {
+                                    if (strcasecmp(vecparticiones[h].part_name, mbr.mbr_particiones[j].part_name) == 0) {
+                                        mbr.mbr_particiones[j] = vecparticiones[h];
+
+                                    }
+                                }
+                                /***************************************/
+                                /******ESCRIBIENDO DE NUEVO EL MBR******/
+                                /***************************************/
+                                fseek(disco, 0L, SEEK_SET);
+                                fwrite(&mbr, sizeof (struct_mbr), 1, disco);
+                                //fclose(disco);
+                                printf("Se quito agrego exitosamente \n");
+                            } else {
+                                printf("No se puede agregar espacio debido a que sobrepasa el espacio libre del disco \n");
+                            }
+                        }else {
+                            //se quiere quitar espacio
+                            if (vecparticiones[h].part_size + tamanoreal > 0 &&  vecparticiones[h].part_size + tamanoreal >= 2097152) {
+                                vecparticiones[h].part_size = vecparticiones[h].part_size + tamanoreal;
+                                for (j = 0; j < 4; j++) {
+                                    if (strcasecmp(vecparticiones[h].part_name, mbr.mbr_particiones[j].part_name) == 0) {
+                                        mbr.mbr_particiones[j] = vecparticiones[h];
+
+                                    }
+                                }
+                                /***************************************/
+                                /******ESCRIBIENDO DE NUEVO EL MBR******/
+                                /***************************************/
+                                fseek(disco, 0L, SEEK_SET);
+                                fwrite(&mbr, sizeof (struct_mbr), 1, disco);
+                                //fclose(disco);
+                                printf("Se quito espacio exitosamente \n");
+
+                            } else {
+                                printf("No se puede quitar espacio debido a que no cumple con el minimo de una particion \n");
+                            }
+                        }
+                    }
+                }
+            } else if (vecparticiones[h].part_type == 'e' || vecparticiones[h].part_type == 'E' && encontro == false) {
+                //no lo ha encontrado y esta buscando en una particion extendida
+                int cantLogicas = 0;
+                int z;
+                struct_ebr aux;
+                for (z = vecparticiones[h].part_start; z < (vecparticiones[h].part_size + vecparticiones[h].part_start + 1); z++) {
+                    fseek(disco, z, SEEK_SET);
+                    fread(&aux, sizeof (struct_ebr), 1, disco);
+                    if (aux.part_next != -1) {
+                        z = (vecparticiones[h].part_size + vecparticiones[h].part_start + 1);
+                    } else {
+                        z = aux.part_next - 1;
+                    }
+                    if (strcasecmp(aux.part_name, name) == 0) {
+                        encontro = true;
+                    }
+                    cantLogicas++;
+                }
+                /*ALMACENANDO LAS LOGICAS EN UN VECTOR*/
+                struct_ebr vecLogicas[cantLogicas];
+                int posLogicas = 0;
+                for (z = vecparticiones[h].part_start; z < (vecparticiones[h].part_size + vecparticiones[h].part_start + 1); z++) {
+                    fseek(disco, z, SEEK_SET);
+                    fread(&aux, sizeof (struct_ebr), 1, disco);
+                    if (aux.part_next != -1) {
+                        z = (vecparticiones[h].part_size + vecparticiones[h].part_start + 1);
+                    } else {
+                        z = aux.part_next - 1;
+                    }
+                    vecLogicas[posLogicas] = aux;
+                }
+                /*COMIENZAN VALIDACIONES PARA EL ADD SOBRE LAS LOGICAS*/
+                if (encontro == true) {
+                    for (z = 1; z < cantLogicas; z++) {
+                        if (strcasecmp(vecLogicas[z].part_name, name) == 0) {
+                            if (z == 1) { //es la primera particion
+                                if (cantLogicas > 2) { //si hay mas de una logica
+                                    if (tamanoreal > 0) {
+                                        //agregar espacio
+                                        espaciolibre = vecLogicas[z + 1].part_start - (vecLogicas[z].part_start + vecLogicas[z].part_size + 1);
+                                        if (espaciolibre > tamanoreal) {
+                                            vecLogicas[z].part_size = vecLogicas[z].part_size + tamanoreal;
+                                            fseek(disco, vecLogicas[z].part_start, SEEK_SET);
+                                            fwrite(&vecLogicas[z], sizeof (struct_ebr), 1, disco);
+                                        } else {
+                                            printf("No hay suficiente espacio para agrandar esta particion \n");
+                                        }
+                                    } else {
+                                        //quitar espacio
+                                        if (vecLogicas[z].part_size + tamanoreal > 0 && vecLogicas[z].part_size + tamanoreal >= 2097152 ) {
+                                            vecLogicas[z].part_size = vecLogicas[z].part_size + tamanoreal;
+                                            fseek(disco, vecLogicas[z].part_start, SEEK_SET);
+                                            fwrite(&vecLogicas[z], sizeof (struct_ebr), 1, disco);
+                                        } else {
+                                            printf("El espacio supera el tamaño de la particion \n");
+                                        }
+                                    }
+                                } else {
+                                    if (tamanoreal > 0) {
+                                        //agregar espacio
+                                        espaciolibre = (vecparticiones[h].part_start + vecparticiones[h].part_size) - (vecLogicas[z].part_start + vecLogicas[z].part_size + 1);
+                                        if (espaciolibre > tamanoreal) {
+                                            vecLogicas[z].part_size = vecLogicas[z].part_size + tamanoreal;
+                                            fseek(disco, vecLogicas[z].part_start, SEEK_SET);
+                                            fwrite(&vecLogicas[z], sizeof (struct_ebr), 1, disco);
+                                        } else {
+                                            printf("No hay suficiente espacio para agrandar esta particion \n");
+                                        }
+                                    } else {
+                                        //quitar espacio
+                                        if (vecLogicas[z].part_size + tamanoreal > 0 && vecLogicas[z].part_size + tamanoreal >= 2097152) {
+                                            vecLogicas[z].part_size = vecLogicas[z].part_size + tamanoreal;
+                                            fseek(disco, vecLogicas[z].part_start, SEEK_SET);
+                                            fwrite(&vecLogicas[z], sizeof (struct_ebr), 1, disco);
+                                        } else {
+                                            printf("El espacio supera el tamaño de la particion \n");
+                                        }
+                                    }
+                                }
+                            }else if (z == cantLogicas - 1) {
+                                //es la ultima particion
+                                if (tamanoreal > 0) {
+                                    //agregar espacio
+                                    espaciolibre = (vecparticiones[h].part_start + vecparticiones[h].part_size) - (vecLogicas[z].part_start + vecLogicas[z].part_size + 1);
+                                    if (espaciolibre > tamanoreal) {
+                                        vecLogicas[z].part_size = vecLogicas[z].part_size + tamanoreal;
+                                        fseek(disco, vecLogicas[z].part_start, SEEK_SET);
+                                        fwrite(&vecLogicas[z], sizeof (struct_ebr), 1, disco);
+                                    } else {
+                                        printf("No hay suficiente espacio para agrandar esta particion \n");
+                                    }
+                                } else {
+                                    //quitar espacio
+                                    if (vecLogicas[z].part_size + tamanoreal > 0 && vecLogicas[z].part_size + tamanoreal >= 2097152) {
+                                        vecLogicas[z].part_size = vecLogicas[z].part_size + tamanoreal;
+                                        fseek(disco, vecLogicas[z].part_start, SEEK_SET);
+                                        fwrite(&vecLogicas[z], sizeof (struct_ebr), 1, disco);
+                                    } else {
+                                        printf("El espacio supera el tamaño de la particion \n");
+                                    }
+                                }
+                            } else {
+                                if (tamanoreal > 0) {
+                                    //agregar espacio
+                                    espaciolibre = (vecLogicas[z + 1].part_start) - (vecLogicas[z].part_start + vecLogicas[z].part_size + 1);
+                                    if (espaciolibre > tamanoreal) {
+                                        vecLogicas[z].part_size = vecLogicas[z].part_size + tamanoreal;
+                                        fseek(disco, vecLogicas[z].part_start, SEEK_SET);
+                                        fwrite(&vecLogicas[z], sizeof (struct_ebr), 1, disco);
+                                    } else {
+                                        printf("No hay suficiente espacio para agrandar esta particion \n");
+                                    }
+                                } else {
+                                    //quitar espacio
+                                    if (vecLogicas[z].part_size + tamanoreal > 0 && vecLogicas[z].part_size + tamanoreal >= 2097152) {
+                                        vecLogicas[z].part_size = vecLogicas[z].part_size + tamanoreal;
+                                        fseek(disco, vecLogicas[z].part_start, SEEK_SET);
+                                        fwrite(&vecLogicas[z], sizeof (struct_ebr), 1, disco);
+                                    } else {
+                                        printf("El espacio supera el tamaño de la particion \n");
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if (encontro == false) {
+            printf("Imposible modificar %s porque no se encuentra en el disco \n", name);
+        }
+        fclose(disco);
+    } else {
+        printf("No existe este disco \n");
+    }
+}
 
 void Mount(Comando comando[]) {
     char pathaux[200];
@@ -1915,13 +2255,18 @@ void GenerarReporteMBR(char disco[], char archivosalida[]){
         //printf("No existe el disco");
     }
     char cmd [200];
+    char cmd2 [200];
     char aux[100];
     limpiarvar(cmd, 200);
+    limpiarvar(cmd2, 200);
     limpiarvar(aux, 100);
     strcpy(aux, archivosalida);
+    strcpy(cmd2,"gnome-open /home/juande/Escritorio/disco1.pdf ");
+    strcat(cmd2,aux);
     strcpy(cmd, "dot -Tpdf /home/juande/Escritorio/MBR.dot -o ");
     strcat(cmd, aux);
     system(cmd);
+    system(cmd2);
 }
 
 void GenerarReporteDisk(char nombreArchivo[], char nombreSalida[]) {
@@ -2140,14 +2485,68 @@ void GenerarReporteDisk(char nombreArchivo[], char nombreSalida[]) {
         fclose(ar);
     }
     char cmd [200];
+    char cmd2 [200];
     char aux[100];
     limpiarvar(aux, 100);
     limpiarvar(cmd, 200);
+    limpiarvar(cmd2, 200);
     strcat(aux, nombreSalida);
+    strcpy(cmd2,"gpicview /home/juande/Escritorio/disco1.jpg ");
+    strcat(cmd2,aux);
     strcpy(cmd, "dot -Tjpg /home/juande/Escritorio/disk.dot -o ");
     strcat(cmd, aux);
     system(cmd);
+    system(cmd2);
 }
+
+void Exec(Comando comando[]){ //METODO DONDE SE LEE EL ARCHIVO PARA EJECUTAR LAS INSTRUCCIONES EN OTRO METODO
+    FILE * ar;
+    char comand[200];
+    limpiarvar(comand, 200);
+    char comandaux[200];
+    int contcomando = 0;
+    limpiarvar(comandaux, 200);
+    strcpy(comandaux, comando[1].comando);
+
+    if (comandaux[0] == '\"') {
+        int x = 2;
+        while (strcasecmp(comando[x].comando, "vacio") != 0) {
+            strcat(comandaux, " ");
+            strcat(comandaux, comando[x].comando);
+            x++;
+        }
+        int i;
+        for (i = 1; i < 200; i++) {
+            if (comandaux[i] != '\"') {
+
+                comand[contcomando] = comandaux[i];
+                contcomando++;
+            } else {
+                i = 200;
+            }
+        }
+    } else {
+        strcpy(comand, comandaux);
+    }
+    ar = fopen(comand, "rb+");
+    if (ar != NULL) {
+        while (fgets(comand, 200, ar) != NULL) {
+            printf("\n%s", comand);
+            if (comand[0] == '#') {
+                printf("Comentario: %s \n", comand);
+            } else if (comand[0] == '\n') {
+
+            } else {
+                //EjecutarScript(comand);
+            }
+        }
+        fclose(ar);
+    } else {
+        printf("LA RUTA NO EXISTE\n\n");
+    }
+
+}
+
 
 void InicializarMontados() {
     int i, j;
