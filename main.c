@@ -74,7 +74,7 @@ void VerificarPathReporte(char Path[]); //Verificar si una path existe o sino cr
 void GenerarReporteMBR(char disco[], char archivosalida[]); //REPORTE DE MBR
 void GenerarReporteDisk(char nombreArchivo[], char nombreSalida[]); //REPORTE DE DISCO
 void Exec(Comando comando[]); //METODO DONDE SE LEE EL ARCHIVO PARA EJECUTAR LAS INSTRUCCIONES EN OTRO METODO
-
+void EjecutarScript(char instruccion[]); //METODO DONDE SE EJECUTAN LOS SCRIPT DEL EXEC
 //PROTOTIPOS AUXILIARES
 int ContarSlash(char path[]);
 void cambio(char aux[]);
@@ -280,7 +280,7 @@ void Mkdisk(Comando comando[]){ //METODO PARA CREAR DISCOS
             strcpy(extension,name);
             token = strtok(extension, ".");
             while (token != NULL) {
-                if (strcasecmp(token, "dsk\"") == 0) {
+                if (strcasecmp(token, "dsk\"") == 0 || strcasecmp(token, "dsk\"\n") == 0) {
                     valida = true;
                 }
                 token = strtok(NULL, ".");
@@ -348,7 +348,7 @@ void VerificarPath(char Path[]){
         {
             int i;
             //for (i = 0; *(carpetas + i) ; i++)
-            for (i = 0; i < slash; i++) {
+            for (i = 0; i < slash-1; i++) {
                 limpiarvar(com,200);
                 limpiarvar(cmd,200);
                 com[0] = '\"';
@@ -377,7 +377,7 @@ void VerificarPath(char Path[]){
         {
             int i;
             //for (i = 0; *(carpetas + i) ; i++)
-            for (i = 0; i < slash ; i++) {
+            for (i = 0; i < slash -1 ; i++) {
                 strcat(auxiliar, "/");
                 strcat(auxiliar, *(carpetas + i));
                 //printf("%s \n",auxiliar);
@@ -517,7 +517,7 @@ void CrearDisco(char cadena[], char unit[],char name[], int size){
         strcpy(auxcadena, cadena);
     }
     strcpy(cadena, auxcadena);
-    strcat(cadena,"/");
+    //strcat(cadena,"/");
     strcat(cadena,auxnombre);
     int espaciorestante; //Variable para obtener el espacio restante en el disco despues de escribir el mbr
     int cont;
@@ -860,7 +860,9 @@ void CrearParticion(char path[], int size, char unit[], char type[], char fit[],
     int tamanoreal; //Variable para tamaño real de la particion
     int cantPrimarias; //numero de particiones primarias
     int cantExtendidas; //numero de particiones extendidas
+
     bool error = false; //booleano para verificar si existe algun error en el script
+
     /**************************/
     /*CONVERSION DE VARIABLES*/
     /*************************/
@@ -871,6 +873,7 @@ void CrearParticion(char path[], int size, char unit[], char type[], char fit[],
     } else if (strcasecmp(fit, "WF") == 0 || strcasecmp(fit, "W") == 0) {
         auxfit = 'W'; //Peor ajuste
     }
+
     if (strcasecmp(unit, "b") == 0) {
         tamanoreal = size;
     } else if (strcasecmp(unit, "k") == 0) {
@@ -879,470 +882,473 @@ void CrearParticion(char path[], int size, char unit[], char type[], char fit[],
         tamanoreal = size * 1024 * 1024;
     }
 
+    /*********************************************/
+    /*COMIENZAN VALIDACIONES PARA CREAR PARTICION*/
+    /*********************************************/
+    FILE *disco;
+    FILE *nuevodisco; //el que se va a usar para sobreescribir a este [disco]
+    struct_mbr mbr;
+    disco = fopen(path, "rb");
+    if (disco != NULL) { //SI existe el disco
+        fread(&mbr, sizeof (mbr), 1, disco); //recuperando el mbr de este disco
+        /*printf("Fue creado: %s \n", mbr.mbr_fecha_creacion);
+        printf("El tamaño del disco es: %i \n", mbr.mbr_tamano);
+        printf("El id del disco es: %i \n", mbr.mbr_disk_signature);*/
+        cantPrimarias = CantidadParticionesPrimarias(mbr);
+        cantExtendidas = CantidadParticionesExtendidas(mbr);
+        int i; //variable para recorrer el vector de particiones en el mbr
 
-    if(tamanoreal < 2097152){ //Validando que la particion sea mayor de 2mb
-        printf("Error al intentar crear una particion, el tamano minimo debe ser 2mb \n");
-    }else{
-        /*********************************************/
-        /*COMIENZAN VALIDACIONES PARA CREAR PARTICION*/
-        /*********************************************/
-        FILE *disco;
-        FILE *nuevodisco; //el que se va a usar para sobreescribir a este [disco]
-        struct_mbr mbr;
-        disco = fopen(path, "rb");
-        if (disco != NULL) {
-            fread(&mbr, sizeof (mbr), 1, disco); //recuperando el mbr de este disco
-            cantPrimarias = CantidadParticionesPrimarias(mbr);
-            cantExtendidas = CantidadParticionesExtendidas(mbr);
-            int i; //variable para recorrer el vector de particiones en el mbr
+        /*CREANDO LA PARTICION QUE SE VA A INTENTAR INSERTAR EN EL DISCO*/
+        struct_particion particion; //Particion que va a ser creada dentro del mbr
+        particion.part_fit = auxfit; //Asignandole el fit
+        strcpy(particion.part_name, name); //Asignandole el nombre
+        particion.part_size = tamanoreal; //Asignandole el tamaño
+        particion.part_status = '1'; //Estado de ocupado
 
-            /****************************************/
-            /*CREANDO PARTICION QUE SE VA A INSERTAR*/
-            /****************************************/
-            struct_particion particion; //Particion que va a ser creada dentro del mbr
-            particion.part_fit = auxfit; //Asignandole el fit
-            strcpy(particion.part_name, name); //Asignandole el nombre
-            particion.part_size = tamanoreal; //Asignandole el tamaño
-            particion.part_status = '1'; //Estado de ocupado
 
-            int totalparticiones = cantExtendidas + cantPrimarias;
-            struct_particion vecparticiones[totalparticiones]; //vector para almacenar las particiones que existen actualmente en el disco
-            int j, p, cont = 0;
-            int espaciolibre; //variable que se utiliza para ir verificando si la partcion cabe en ese espacio
-            if (totalparticiones > 0) {
-                for (j = 0; j < 4; j++) { //Verificando que particiones existen y almacenandolas en un vector
-                    if (mbr.mbr_particiones[j].part_start > 0 && mbr.mbr_particiones[j].part_status != '0') {
-                        vecparticiones[cont] = mbr.mbr_particiones[j];
-                        cont++;
+        int totalparticiones = cantExtendidas + cantPrimarias;
+        struct_particion vecparticiones[totalparticiones]; //vector para almacenar las particiones que existen actualmente en el disco
+        int j, p, cont = 0;
+        int espaciolibre; //variable que se utiliza para ir verificando si la partcion cabe en ese espacio
+        if (totalparticiones > 0) {
+            for (j = 0; j < 4; j++) { //Verificando que particiones existen y almacenandolas en un vector
+                if (mbr.mbr_particiones[j].part_start > 0 && mbr.mbr_particiones[j].part_status != '0') {
+                    vecparticiones[cont] = mbr.mbr_particiones[j];
+                    cont++;
+                }
+            }
+        }
+        /**************************************/
+        /*ORDENANDO EL VECTOR POR BURBUJA******/
+        /*************************************/
+        if (totalparticiones > 0) {
+            for (j = 0; j < totalparticiones; j++) {
+                for (p = 0; p < totalparticiones - 1; p++) {
+                    if (vecparticiones[p].part_start > vecparticiones[p + 1].part_start) {
+                        struct_particion aux = vecparticiones[p];
+                        vecparticiones[p] = vecparticiones[p + 1];
+                        vecparticiones[p + 1] = aux;
                     }
                 }
             }
-            /**************************************/
-            /*ORDENANDO EL VECTOR POR BURBUJA******/
-            /*************************************/
-            if (totalparticiones > 0) {
-                for (j = 0; j < totalparticiones; j++) {
-                    for (p = 0; p < totalparticiones - 1; p++) {
-                        if (vecparticiones[p].part_start > vecparticiones[p + 1].part_start) {
-                            struct_particion aux = vecparticiones[p];
-                            vecparticiones[p] = vecparticiones[p + 1];
-                            vecparticiones[p + 1] = aux;
-                        }
-                    }
-                }
-            }
+        }
 
-            /******************************************/
-            /**********PARA CREAR UNA PRIMARIA*********/
-            /******************************************/
-            if (strcasecmp(type, "p") == 0) {
-                bool errores = false; //booleano para verificar que no existe un error antes de meterla en el mbr
-                int tamanodisponible;
-                auxtype = 'p'; //Particion primaria
-                particion.part_type = auxtype;
-                if (cantPrimarias < 3) { //Hay menos de 3 particiones primarias
-                    if (cantPrimarias == 0 && cantExtendidas == 0) { //El disco esta vacio
-                        tamanodisponible = mbr.mbr_tamano - (sizeof (mbr) + 1);
-                        bool EntraParticion = false;
-                        for (i = 0; i < 3 && EntraParticion == false; i++) {
-                            if (mbr.mbr_particiones[i].part_status == '0') {
-                                particion.part_start = sizeof (mbr) + 1;
-                                particion.part_size = tamanoreal;
-                                if (tamanodisponible > tamanoreal) {
-                                    //printf("Si se insertara la particion \n");
-                                    EntraParticion = true;
-                                    mbr.mbr_particiones[i] = particion;
-                                    /*SOBREESCRIBIENDO EL DISCO*/
-                                    int cont;
-                                    nuevodisco = fopen(path, "rb+");
-                                    fseek(nuevodisco, 0L, SEEK_SET);
-                                    fwrite(&mbr, sizeof (struct_mbr), 1, nuevodisco);
-                                    char relleno = '\0'; //variable con la que se va a rellenar el disco duro
-                                    /*for(cont = 0; cont < mbr.mbr_tamano - 1;cont++ ){
-                                        fwrite(&relleno, 1, 1 , nuevodisco);
-                                    }*/
-                                    fclose(nuevodisco);
-                                    printf("Particion creada con exito \n");
-                                } else {
-                                    printf("No hay espacio suficiente \n");
-                                    errores = true;
-                                    break;
-                                }
-                            }
-                        }
-                    } else { //Existe al menos 1 particion
-                        /********************************************************************************/
-                        /*COMPARANDO PARA VER SI EXISTE UN ESPACIO DEL TAMAÑO DE LA PARTICION A INSERTAR*/
-                        /********************************************************************************/
-                        bool SiEntro = false; //Variable para saber que si encontro un espacio con ese tamaño
-                        for (j = 0; j < totalparticiones + 1 && SiEntro == false; j++) {
-                            if (j == 0) {//Comparando el espacio libre entre la mas cercana al mbr y el mbr
-                                espaciolibre = (vecparticiones[j].part_start) - (sizeof (mbr) + 1);
-                                if (espaciolibre >= tamanoreal) {
-                                    //printf("Espacio suficiente para esta particion \n");
-                                    particion.part_start = sizeof (mbr) + 1;
-                                    SiEntro = true;
-                                }
-                            } else if (j == totalparticiones) { //Si es la ultima particion del vector
-                                espaciolibre = mbr.mbr_tamano - (vecparticiones[j - 1].part_start + vecparticiones[j - 1].part_size);
-                                if (espaciolibre >= tamanoreal) {
-                                    //printf("Espacio suficiente para esta particion \n");
-                                    particion.part_start = (vecparticiones[j - 1].part_start + vecparticiones[j - 1].part_size + 1);
-                                    SiEntro = true;
-                                }
-                            } else {
-                                espaciolibre = vecparticiones[j].part_start - (vecparticiones[j - 1].part_start + vecparticiones[j - 1].part_size + 1);
-                                if (espaciolibre >= tamanoreal) {
-                                    //printf("Espacio suficiente para esta particion \n");
-                                    particion.part_start = vecparticiones[j - 1].part_start + vecparticiones[j - 1].part_size + 1;
-                                    SiEntro = true;
-                                }
-                            }
-                        }
-                        /********************************************/
-                        /**COMPARANDO NOMBRES PARA EVITAR REPETIDOS*/
-                        /*******************************************/
-                        for (j = 0; j < totalparticiones && errores == false; j++) {
-                            if (strcasecmp(vecparticiones[j].part_name, particion.part_name) == 0) {
-                                printf("Ya existe una particion con ese nombre \n");
-                                errores = true;
-                            }
-                            if (vecparticiones[j].part_type == 'e' || vecparticiones[j].part_type == 'E' && errores == false) {
-                                struct_ebr auxnombres;
-                                int fin = vecparticiones[j].part_size + vecparticiones[j].part_start;
-                                bool ultima = false; //booleano para saber si llego a la ultima logica
-                                for (i = vecparticiones[j].part_start; i < fin + 1 && errores == false && ultima == false; i++) {
-                                    fseek(disco, i, SEEK_SET);
-                                    fread(&auxnombres, sizeof (struct_ebr), 1, disco);
-                                    if (strcasecmp(auxnombres.part_name, name) == 0) {
-                                        printf("Ya existe una particion con ese nombre \n");
-                                        errores = true;
-                                    }
-                                    if (auxnombres.part_next == -1) {
-                                        ultima = true;
-                                    }
-                                    i = auxnombres.part_start + auxnombres.part_size;
-
-
-                                }
-                            }
-                        }
-                        /*************************************************************/
-                        /*INGRESANDO LA PARTICION EN EL VECTOR DE PARTICIONES DEL MBR*/
-                        /*************************************************************/
-                        if (SiEntro == true && errores == false) { //logro encontrar un espacio para esa particion y no hay errores
-                            bool ingresada = false;
-                            for (j = 0; j < 4 && ingresada == false; j++) {
-                                if (mbr.mbr_particiones[j].part_status == '0') {
-                                    mbr.mbr_particiones[j] = particion;
-                                    ingresada = true;
-                                }
-                            }
-                            /***************************************/
-                            /******ESCRIBIENDO DE NUEVO EL MBR******/
-                            /***************************************/
-                            if (ingresada == true) { //si logro ingresarla
+        /**************************************************************************/
+        /***************PARA CREAR UNA PRIMARIA***********************************/
+        /**************************************************************************/
+        if (strcasecmp(type, "p") == 0) {
+            bool errores = false; //booleano para verificar que no existe un error antes de meterla en el mbr
+            int tamanodisponible;
+            auxtype = 'p'; //Particion primaria
+            particion.part_type = auxtype;
+            if (cantPrimarias < 3) { //Hay menos de 3 particiones primarias
+                if (cantPrimarias == 0 && cantExtendidas == 0) { //El disco esta vacio
+                    tamanodisponible = mbr.mbr_tamano - (sizeof (mbr) + 1);
+                    bool EntraParticion = false;
+                    for (i = 0; i < 3 && EntraParticion == false; i++) {
+                        if (mbr.mbr_particiones[i].part_status == '0') {
+                            particion.part_start = sizeof (mbr) + 1;
+                            particion.part_size = tamanoreal;
+                            if (tamanodisponible > tamanoreal) {
+                                //printf("Si se insertara la particion \n");
+                                EntraParticion = true;
+                                mbr.mbr_particiones[i] = particion;
+                                /*SOBREESCRIBIENDO EL DISCO*/
+                                int cont;
                                 nuevodisco = fopen(path, "rb+");
                                 fseek(nuevodisco, 0L, SEEK_SET);
                                 fwrite(&mbr, sizeof (struct_mbr), 1, nuevodisco);
+                                char relleno = '\0'; //variable con la que se va a rellenar el disco duro
+                                /*for(cont = 0; cont < mbr.mbr_tamano - 1;cont++ ){
+                                    fwrite(&relleno, 1, 1 , nuevodisco);
+                                }*/
                                 fclose(nuevodisco);
-                                printf("Se creo la particion exitosamente \n");
+                                printf("Particion creada con exito \n");
+                            } else {
+                                printf("No hay espacio suficiente \n");
+                                errores = true;
+                                break;
                             }
                         }
                     }
-                } else { //Si ya existen 3 primarias
-                    printf("Este disco alcanzó el limite de particiones primarias [3] \n");
-                    error = true;
-                }
-            }
-            /**************************************************************************/
-            /***************PARA CREAR UNA EXTENDIDA***********************************/
-            /**************************************************************************/
-            else if (strcasecmp(type, "e") == 0){
-                bool errores = false; //booleano para verificar que no exista ningun error antes de insertarla en el mbr
-                int tamanodisponible;
-                auxtype = 'e'; //Particion extendida
-                particion.part_type = auxtype;
-                if (cantExtendidas == 0) { //Si no hay ninguna extendida
-                    if (cantPrimarias == 0 && cantExtendidas == 0) { //El disco esta vacio
-                        tamanodisponible = mbr.mbr_tamano - (sizeof (mbr) + 1);
-                        bool EntraParticion = false;
-                        for (i = 0; i < 4 && EntraParticion == false; i++) {
-                            if (mbr.mbr_particiones[i].part_status == '0') {
+                } else { //Existe al menos 1 particion
+                    /********************************************************************************/
+                    /*COMPARANDO PARA VER SI EXISTE UN ESPACIO DEL TAMAÑO DE LA PARTICION A INSERTAR*/
+                    /********************************************************************************/
+                    bool SiEntro = false; //Variable para saber que si encontro un espacio con ese tamaño
+                    for (j = 0; j < totalparticiones + 1 && SiEntro == false; j++) {
+                        if (j == 0) {//Comparando el espacio libre entre la mas cercana al mbr y el mbr
+                            espaciolibre = (vecparticiones[j].part_start) - (sizeof (mbr) + 1);
+                            if (espaciolibre >= tamanoreal) {
+                                //printf("Espacio suficiente para esta particion \n");
                                 particion.part_start = sizeof (mbr) + 1;
-                                particion.part_size = tamanoreal;
-                                if (tamanodisponible > tamanoreal) {
-                                    //printf("Si se insertara la particion \n");
-                                    EntraParticion = true;
-                                    mbr.mbr_particiones[i] = particion;
-                                    struct_ebr ebrprimero; //ebr que se pondra en la particion extendida
-                                    ebrprimero.part_fit = 'N';
-                                    strcpy(ebrprimero.part_name, "N");
-                                    ebrprimero.part_next = -1; //apuntador al siguiente ebr
-                                    ebrprimero.part_size = sizeof (struct_ebr);
-                                    ebrprimero.part_start = particion.part_start;
-                                    ebrprimero.part_status = '0';
-                                    /*SOBREESCRIBIENDO EL DISCO*/
-                                    int cont;
-                                    nuevodisco = fopen(path, "rb+");
-                                    fseek(nuevodisco, 0L, SEEK_SET);
-                                    fwrite(&mbr, sizeof (struct_mbr), 1, nuevodisco);
-                                    fseek(nuevodisco, (particion.part_start), SEEK_SET);
-                                    fwrite(&ebrprimero, sizeof (struct_ebr), 1, nuevodisco);
-                                    rewind(nuevodisco);
-                                    char relleno = '\0'; //variable con la que se va a rellenar el disco duro
-                                    /*for(cont = 0; cont < mbr.mbr_tamano - 1;cont++ ){
-                                        fwrite(&relleno, 1, 1 , nuevodisco);
-                                    }*/
-                                    fclose(nuevodisco);
-                                } else {
-                                    printf("No hay espacio suficiente \n");
+                                SiEntro = true;
+                            }
+                        } else if (j == totalparticiones) { //Si es la ultima particion del vector
+                            espaciolibre = mbr.mbr_tamano - (vecparticiones[j - 1].part_start + vecparticiones[j - 1].part_size);
+                            if (espaciolibre >= tamanoreal) {
+                                //printf("Espacio suficiente para esta particion \n");
+                                particion.part_start = (vecparticiones[j - 1].part_start + vecparticiones[j - 1].part_size + 1);
+                                SiEntro = true;
+                            }
+                        } else {
+                            espaciolibre = vecparticiones[j].part_start - (vecparticiones[j - 1].part_start + vecparticiones[j - 1].part_size + 1);
+                            if (espaciolibre >= tamanoreal) {
+                                //printf("Espacio suficiente para esta particion \n");
+                                particion.part_start = vecparticiones[j - 1].part_start + vecparticiones[j - 1].part_size + 1;
+                                SiEntro = true;
+                            }
+                        }
+                    }
+
+                    /********************************************/
+                    /**COMPARANDO NOMBRES PARA EVITAR REPETIDOS*/
+                    /*******************************************/
+                    for (j = 0; j < totalparticiones && errores == false; j++) {
+                        if (strcasecmp(vecparticiones[j].part_name, particion.part_name) == 0) {
+                            printf("Ya existe una particion con ese nombre \n");
+                            errores = true;
+                        }
+                        if (vecparticiones[j].part_type == 'e' || vecparticiones[j].part_type == 'E' && errores == false) {
+                            struct_ebr auxnombres;
+                            int fin = vecparticiones[j].part_size + vecparticiones[j].part_start;
+                            bool ultima = false; //booleano para saber si llego a la ultima logica
+                            for (i = vecparticiones[j].part_start; i < fin + 1 && errores == false && ultima == false; i++) {
+                                fseek(disco, i, SEEK_SET);
+                                fread(&auxnombres, sizeof (struct_ebr), 1, disco);
+                                if (strcasecmp(auxnombres.part_name, name) == 0) {
+                                    printf("Ya existe una particion con ese nombre \n");
                                     errores = true;
                                 }
+                                if (auxnombres.part_next == -1) {
+                                    ultima = true;
+                                }
+                                i = auxnombres.part_start + auxnombres.part_size;
+
+
                             }
                         }
-                    } else { //Existe al menos 1 particion
-                        /********************************************************************************/
-                        /*COMPARANDO PARA VER SI EXISTE UN ESPACIO DEL TAMAÑO DE LA PARTICION A INSERTAR*/
-                        /********************************************************************************/
-                        bool SiEntro = false; //Variable para saber que si encontro un espacio con ese tamaño
-                        for (j = 0; j < totalparticiones + 1 && SiEntro == false; j++) {
-                            if (j == 0) {//Comparando el espacio libre entre la mas cercana al mbr y el mbr
-                                espaciolibre = (vecparticiones[j].part_start) - (sizeof (mbr) + 1);
-                                if (espaciolibre >= tamanoreal) {
-                                    //printf("Espacio suficiente para esta particion");
-                                    particion.part_start = sizeof (mbr) + 1;
-                                    SiEntro = true;
-                                }
-                            } else if (j == totalparticiones) { //Si es la ultima particion del vector
-                                espaciolibre = mbr.mbr_tamano - (vecparticiones[j - 1].part_start + vecparticiones[j - 1].part_size);
-                                if (espaciolibre >= tamanoreal) {
-                                    //printf("Espacio suficiente para esta particion");
-                                    particion.part_start = (vecparticiones[j - 1].part_start + vecparticiones[j - 1].part_size + 1);
-                                    SiEntro = true;
-                                }
-                            } else {
-                                espaciolibre = vecparticiones[j].part_start - (vecparticiones[j - 1].part_start + vecparticiones[j - 1].part_size + 1);
-                                if (espaciolibre >= tamanoreal) {
-                                    //printf("Espacio suficiente para esta particion");
-                                    particion.part_start = vecparticiones[j - 1].part_start + vecparticiones[j - 1].part_size + 1;
-                                    SiEntro = true;
-                                }
+                    }
+                    /*************************************************************/
+                    /*INGRESANDO LA PARTICION EN EL VECTOR DE PARTICIONES DEL MBR*/
+                    /*************************************************************/
+                    if (SiEntro == true && errores == false) { //logro encontrar un espacio para esa particion y no hay errores
+                        bool ingresada = false;
+                        for (j = 0; j < 4 && ingresada == false; j++) {
+                            if (mbr.mbr_particiones[j].part_status == '0') {
+                                mbr.mbr_particiones[j] = particion;
+                                ingresada = true;
                             }
                         }
-                        /********************************************/
-                        /**COMPARANDO NOMBRES PARA EVITAR REPETIDOS*/
-                        /*******************************************/
-                        for (j = 0; j < totalparticiones; j++) {
-                            if (strcasecmp(vecparticiones[j].part_name, particion.part_name) == 0) {
-                                printf("Ya existe una particion con ese nombre \n");
-                                errores = true;
-                            }
+                        /***************************************/
+                        /******ESCRIBIENDO DE NUEVO EL MBR******/
+                        /***************************************/
+                        if (ingresada == true) { //si logro ingresarla
+                            nuevodisco = fopen(path, "rb+");
+                            fseek(nuevodisco, 0L, SEEK_SET);
+                            fwrite(&mbr, sizeof (struct_mbr), 1, nuevodisco);
+                            fclose(nuevodisco);
+                            printf("Se creo la particion exitosamente \n");
                         }
-                        /*************************************************************/
-                        /*INGRESANDO LA PARTICION EN EL VECTOR DE PARTICIONES DEL MBR*/
-                        /*************************************************************/
-                        if (SiEntro == true && errores == false) { //logro encontrar un espacio para esa particion y no hay errores
-                            bool ingresada = false;
-                            for (j = 0; j < 4 && ingresada == false; j++) {
-                                if (mbr.mbr_particiones[j].part_status == '0') {
-                                    mbr.mbr_particiones[j] = particion;
-                                    ingresada = true;
-                                }
-                            }
-                            /***************************************/
-                            /******ESCRIBIENDO DE NUEVO EL MBR******/
-                            /***************************************/
-                            if (ingresada == true) { //si logro ingresarla
+                    }
+                }
+            } else { //Si ya existen 3 primarias
+                printf("Este disco alcanzó el limite de particiones primarias [3] \n");
+                error = true;
+            }
+        }/**************************************************************************/
+            /***************PARA CREAR UNA EXTENDIDA***********************************/
+            /**************************************************************************/
+        else if (strcasecmp(type, "e") == 0) {
+            bool errores = false; //booleano para verificar que no exista ningun error antes de insertarla en el mbr
+            int tamanodisponible;
+            auxtype = 'e'; //Particion extendida
+            particion.part_type = auxtype;
+            if (cantExtendidas == 0) { //Si no hay ninguna extendida
+                if (cantPrimarias == 0 && cantExtendidas == 0) { //El disco esta vacio
+                    tamanodisponible = mbr.mbr_tamano - (sizeof (mbr) + 1);
+                    bool EntraParticion = false;
+                    for (i = 0; i < 4 && EntraParticion == false; i++) {
+                        if (mbr.mbr_particiones[i].part_status == '0') {
+                            particion.part_start = sizeof (mbr) + 1;
+                            particion.part_size = tamanoreal;
+                            if (tamanodisponible > tamanoreal) {
+                                //printf("Si se insertara la particion \n");
+                                EntraParticion = true;
+                                mbr.mbr_particiones[i] = particion;
                                 struct_ebr ebrprimero; //ebr que se pondra en la particion extendida
                                 ebrprimero.part_fit = 'N';
                                 strcpy(ebrprimero.part_name, "N");
-                                ebrprimero.part_next = -1;
+                                ebrprimero.part_next = -1; //apuntador al siguiente ebr
                                 ebrprimero.part_size = sizeof (struct_ebr);
                                 ebrprimero.part_start = particion.part_start;
                                 ebrprimero.part_status = '0';
+                                /*SOBREESCRIBIENDO EL DISCO*/
+                                int cont;
                                 nuevodisco = fopen(path, "rb+");
                                 fseek(nuevodisco, 0L, SEEK_SET);
                                 fwrite(&mbr, sizeof (struct_mbr), 1, nuevodisco);
                                 fseek(nuevodisco, (particion.part_start), SEEK_SET);
                                 fwrite(&ebrprimero, sizeof (struct_ebr), 1, nuevodisco);
                                 rewind(nuevodisco);
+                                char relleno = '\0'; //variable con la que se va a rellenar el disco duro
+                                /*for(cont = 0; cont < mbr.mbr_tamano - 1;cont++ ){
+                                    fwrite(&relleno, 1, 1 , nuevodisco);
+                                }*/
                                 fclose(nuevodisco);
-                                printf("Se creo la particion exitosamente \n");
+                            } else {
+                                printf("No hay espacio suficiente \n");
+                                errores = true;
                             }
                         }
                     }
-                } else {
-                    printf("Este disco alcanzó el limite de particiones extendidas [1] \n");
-                    error = true;
-                }
-            }
-            /**************************************************************************/
-            /************************PARA CREAR UNA LOGICA*****************************/
-            /**************************************************************************/
-            else if (strcasecmp(type, "l") == 0) {
-                bool errornombre = false;
-                bool errores = false; //booleano para verificar que no exista ningun error antes de insertarla
-                int tamanodisponible;
-                auxtype = 'l'; //Particion logica
-                int j;
-                particion.part_type = auxtype;
-                struct_particion auxExtendida;
-                struct_ebr ebr; //ebr que se usara para insertar
-
-                int contLogicas = 0; //contador para saber cuantos ebr hay
-                int i;
-                if (cantExtendidas > 0) { //validando que ya exista una extendida donde almacemarla
-                    for (i = 0; i < 4; i++) {
-                        if (mbr.mbr_particiones[i].part_type == 'e') {
-                            auxExtendida = mbr.mbr_particiones[i]; //almacenando la extendida en una auxiliar para trabajar
-                            i = 4;
-                        }
-                    }
-                    if (tamanoreal <= auxExtendida.part_size) { //validando que el tamaño de la logica no sobrepase el tamaño de la extendida
-                        /********************************************/
-                        /**COMPARANDO NOMBRES PARA EVITAR REPETIDOS*/
-                        /*******************************************/
-                        for (j = 0; j < totalparticiones && errornombre == false; j++) {
-                            if (strcasecmp(vecparticiones[j].part_name, name) == 0) {
-                                printf("Ya existe una particion con ese nombre \n");
-                                errornombre = true;
+                } else { //Existe al menos 1 particion
+                    /********************************************************************************/
+                    /*COMPARANDO PARA VER SI EXISTE UN ESPACIO DEL TAMAÑO DE LA PARTICION A INSERTAR*/
+                    /********************************************************************************/
+                    bool SiEntro = false; //Variable para saber que si encontro un espacio con ese tamaño
+                    for (j = 0; j < totalparticiones + 1 && SiEntro == false; j++) {
+                        if (j == 0) {//Comparando el espacio libre entre la mas cercana al mbr y el mbr
+                            espaciolibre = (vecparticiones[j].part_start) - (sizeof (mbr) + 1);
+                            if (espaciolibre >= tamanoreal) {
+                                //printf("Espacio suficiente para esta particion");
+                                particion.part_start = sizeof (mbr) + 1;
+                                SiEntro = true;
                             }
-                            if (vecparticiones[j].part_type == 'e' || vecparticiones[j].part_type == 'E' && errornombre == false) {
-                                struct_ebr auxnombres;
-                                int fin = vecparticiones[j].part_size + vecparticiones[j].part_start;
-                                bool ultima = false;
-                                for (i = vecparticiones[j].part_start; i < fin + 1 && errornombre == false && ultima == false; i++) {
-                                    nuevodisco = fopen(path, "rb");
-                                    fseek(nuevodisco, i, SEEK_SET);
-                                    fread(&auxnombres, sizeof (struct_ebr), 1, nuevodisco);
-                                    if (strcasecmp(auxnombres.part_name, name) == 0) {
-                                        //printf("Ya existe una particion con ese nombre \n");
-                                        errornombre = true;
-                                    }
-                                    if (auxnombres.part_next == -1) {
-                                        ultima = true;
-                                    }
-                                    i = auxnombres.part_next - 1; //Se mueve i hasta donde termina la particion para leer otro bloque
-                                    fclose(nuevodisco);
-                                }
-                            }
-                        }
-
-                        if (errornombre == false) { //Si no encontro ninguna particion con el mismo nombre
-                            bool errorespacio = false; //booleano para saber si existe espacio disponible
-                            for (j = 0; j < totalparticiones && errorespacio == false; j++) {
-                                if (vecparticiones[j].part_type == 'e' || vecparticiones[j].part_type == 'E' && errorespacio == false) {
-                                    struct_ebr auxnombres;
-                                    int fin = vecparticiones[j].part_size + vecparticiones[j].part_start;
-                                    bool ultima = false; //para saber si entro en la ultima particion
-                                    for (i = vecparticiones[j].part_start; i < fin + 1 && errorespacio == false && ultima == false; i++) {
-                                        fseek(disco, i, SEEK_SET);
-                                        fread(&auxnombres, sizeof (struct_ebr), 1, disco);
-                                        if (auxnombres.part_next == -1) { //encontro la ultima
-                                            ultima = true;
-                                        }
-                                        i = auxnombres.part_next - 1;
-                                        contLogicas++;
-                                    }
-                                }
-                            }
-                            int contposlogicas = 0;
-                            struct_ebr vecLogicas[contLogicas]; //vector donde se van a almacenar las logicas
-                            for (j = 0; j < totalparticiones; j++) {
-                                struct_ebr auxlogicas;
-                                if (vecparticiones[j].part_type == 'e' || vecparticiones[j].part_type == 'E') {
-                                    int fin = vecparticiones[j].part_size + vecparticiones[j].part_start;
-                                    bool ultima = false;
-                                    for (i = vecparticiones[j].part_start; i < fin + 1 && ultima == false; i++) {
-                                        fseek(disco, i, SEEK_SET);
-                                        fread(&auxlogicas, sizeof (struct_ebr), 1, disco);
-                                        vecLogicas[contposlogicas] = auxlogicas;
-                                        if (auxlogicas.part_next == -1) {
-                                            ultima = true;
-                                        }
-                                        i = auxlogicas.part_next - 1;
-                                        contposlogicas++;
-                                    }
-                                }
-                            }
-                            bool sientro = false;
-                            /*************************************************************/
-                            /*Recorriendo el vector de logicas para realizar la insercion*/
-                            /*************************************************************/
-                            if (contLogicas > 1) {
-                                for (j = 0; j < contLogicas && sientro == false; j++) {
-                                    if (j == (contLogicas - 1)) {//Comparando el espacio libre entre la ultima y el final de la extendida
-                                        espaciolibre = (auxExtendida.part_start + auxExtendida.part_size) - (vecLogicas[j].part_start + vecLogicas[j].part_size);
-                                        if (espaciolibre > tamanoreal) {
-                                            vecLogicas[j].part_next = vecLogicas[j].part_start + vecLogicas[j].part_size + 1;
-                                            ebr.part_fit = auxfit;
-                                            strcpy(ebr.part_name, name);
-                                            ebr.part_next = -1;
-                                            ebr.part_size = tamanoreal;
-                                            ebr.part_start = vecLogicas[j].part_start + vecLogicas[j].part_size + 1;
-                                            ebr.part_status = '1';
-                                            sientro = true;
-
-                                        }
-                                    } else {
-                                        espaciolibre = (vecLogicas[j + 1].part_start) - (vecLogicas[j].part_start + vecLogicas[j].part_size + 1);
-                                        if (espaciolibre > tamanoreal) {
-                                            vecLogicas[j].part_next = vecLogicas[j].part_start + vecLogicas[j].part_size + 1;
-                                            ebr.part_fit = auxfit;
-                                            strcpy(ebr.part_name, name);
-                                            ebr.part_next = vecLogicas[j + 1].part_start;
-                                            ebr.part_size = tamanoreal;
-                                            ebr.part_start = vecLogicas[j].part_start + vecLogicas[j].part_size + 1;
-                                            ebr.part_status = '1';
-                                            sientro = true;
-                                        }
-                                    }
-                                }
-                            } else {
-                                espaciolibre = (auxExtendida.part_start + auxExtendida.part_size) - (vecLogicas[j].part_start + vecLogicas[j].part_size);
-                                if (espaciolibre > tamanoreal) {
-                                    vecLogicas[j].part_next = vecLogicas[j].part_start + vecLogicas[j].part_size + 1;
-                                    ebr.part_fit = auxfit;
-                                    strcpy(ebr.part_name, name);
-                                    ebr.part_next = -1;
-                                    ebr.part_size = tamanoreal;
-                                    ebr.part_start = vecLogicas[j].part_start + vecLogicas[j].part_size + 1;
-                                    ebr.part_status = '1';
-                                    sientro = true;
-                                }
-                            }
-                            /********************************************************/
-                            /*Sobreescribiendo el disco despues de las validaciones*/
-                            /*******************************************************/
-                            if (sientro == true) { //Si encontro un espacio para la nueva particion
-                                nuevodisco = fopen(path, "rb+");
-                                fseek(nuevodisco, ebr.part_start, SEEK_SET);
-                                fwrite(&ebr, sizeof (struct_ebr), 1, nuevodisco);
-                                int x;
-                                for (x = 0; x < contLogicas; x++) {
-                                    fseek(nuevodisco, vecLogicas[x].part_start, SEEK_SET);
-                                    fwrite(&vecLogicas[x], sizeof (struct_ebr), 1, nuevodisco);
-                                }
-                                rewind(nuevodisco);
-                                fclose(nuevodisco);
-                                printf("Se creo la particion correctamente \n");
-                            } else {
-                                printf("No se encontro un espacio disponible para crear esta particion \n");
+                        } else if (j == totalparticiones) { //Si es la ultima particion del vector
+                            espaciolibre = mbr.mbr_tamano - (vecparticiones[j - 1].part_start + vecparticiones[j - 1].part_size);
+                            if (espaciolibre >= tamanoreal) {
+                                //printf("Espacio suficiente para esta particion");
+                                particion.part_start = (vecparticiones[j - 1].part_start + vecparticiones[j - 1].part_size + 1);
+                                SiEntro = true;
                             }
                         } else {
-                            printf("Ya existe una particion con ese nombre \n");
+                            espaciolibre = vecparticiones[j].part_start - (vecparticiones[j - 1].part_start + vecparticiones[j - 1].part_size + 1);
+                            if (espaciolibre >= tamanoreal) {
+                                //printf("Espacio suficiente para esta particion");
+                                particion.part_start = vecparticiones[j - 1].part_start + vecparticiones[j - 1].part_size + 1;
+                                SiEntro = true;
+                            }
                         }
-                    }else {
-                        printf("La particion que intenta crear sobrepasa el tamaño de la extendida \n");
+                    }
+                    /********************************************/
+                    /**COMPARANDO NOMBRES PARA EVITAR REPETIDOS*/
+                    /*******************************************/
+                    for (j = 0; j < totalparticiones; j++) {
+                        if (strcasecmp(vecparticiones[j].part_name, particion.part_name) == 0) {
+                            printf("Ya existe una particion con ese nombre \n");
+                            errores = true;
+                        }
+
+                    }
+                    /*************************************************************/
+                    /*INGRESANDO LA PARTICION EN EL VECTOR DE PARTICIONES DEL MBR*/
+                    /*************************************************************/
+                    if (SiEntro == true && errores == false) { //logro encontrar un espacio para esa particion y no hay errores
+                        bool ingresada = false;
+                        for (j = 0; j < 4 && ingresada == false; j++) {
+                            if (mbr.mbr_particiones[j].part_status == '0') {
+                                mbr.mbr_particiones[j] = particion;
+                                ingresada = true;
+                            }
+                        }
+                        /***************************************/
+                        /******ESCRIBIENDO DE NUEVO EL MBR******/
+                        /***************************************/
+                        if (ingresada == true) { //si logro ingresarla
+                            struct_ebr ebrprimero; //ebr que se pondra en la particion extendida
+                            ebrprimero.part_fit = 'N';
+                            strcpy(ebrprimero.part_name, "N");
+                            ebrprimero.part_next = -1;
+                            ebrprimero.part_size = sizeof (struct_ebr);
+                            ebrprimero.part_start = particion.part_start;
+                            ebrprimero.part_status = '0';
+                            nuevodisco = fopen(path, "rb+");
+                            fseek(nuevodisco, 0L, SEEK_SET);
+                            fwrite(&mbr, sizeof (struct_mbr), 1, nuevodisco);
+                            fseek(nuevodisco, (particion.part_start), SEEK_SET);
+                            fwrite(&ebrprimero, sizeof (struct_ebr), 1, nuevodisco);
+                            rewind(nuevodisco);
+                            fclose(nuevodisco);
+                            printf("Se creo la particion exitosamente \n");
+                        }
+                    }
+                }
+            } else {
+                printf("Este disco alcanzó el limite de particiones extendidas [1] \n");
+                error = true;
+            }
+        }/**************************************************************************/
+            /************************PARA CREAR UNA LOGICA*****************************/
+            /**************************************************************************/
+        else if (strcasecmp(type, "l") == 0) {
+            bool errornombre = false;
+            bool errores = false; //booleano para verificar que no exista ningun error antes de insertarla
+            int tamanodisponible;
+            auxtype = 'l'; //Particion logica
+            int j;
+            particion.part_type = auxtype;
+            struct_particion auxExtendida;
+            struct_ebr ebr; //ebr que se usara para insertar
+
+            int contLogicas = 0; //contador para saber cuantos ebr hay
+            int i;
+            if (cantExtendidas > 0) { //validando que ya exista una extendida donde almacemarla
+                for (i = 0; i < 4; i++) {
+                    if (mbr.mbr_particiones[i].part_type == 'e') {
+                        auxExtendida = mbr.mbr_particiones[i]; //almacenando la extendida en una auxiliar para trabajar
+                        i = 4;
+                    }
+                }
+
+                if (tamanoreal <= auxExtendida.part_size) { //validando que el tamaño de la logica no sobrepase el tamaño de la extendida
+                    /********************************************/
+                    /**COMPARANDO NOMBRES PARA EVITAR REPETIDOS*/
+                    /*******************************************/
+                    for (j = 0; j < totalparticiones && errornombre == false; j++) {
+                        if (strcasecmp(vecparticiones[j].part_name, name) == 0) {
+                            printf("Ya existe una particion con ese nombre \n");
+                            errornombre = true;
+                        }
+                        if (vecparticiones[j].part_type == 'e' || vecparticiones[j].part_type == 'E' && errornombre == false) {
+                            struct_ebr auxnombres;
+                            int fin = vecparticiones[j].part_size + vecparticiones[j].part_start;
+                            bool ultima = false;
+                            for (i = vecparticiones[j].part_start; i < fin + 1 && errornombre == false && ultima == false; i++) {
+                                nuevodisco = fopen(path, "rb");
+                                fseek(nuevodisco, i, SEEK_SET);
+                                fread(&auxnombres, sizeof (struct_ebr), 1, nuevodisco);
+                                if (strcasecmp(auxnombres.part_name, name) == 0) {
+                                    //printf("Ya existe una particion con ese nombre \n");
+                                    errornombre = true;
+                                }
+                                if (auxnombres.part_next == -1) {
+                                    ultima = true;
+                                }
+                                i = auxnombres.part_next - 1; //Se mueve i hasta donde termina la particion para leer otro bloque
+                                fclose(nuevodisco);
+                            }
+                        }
+                    }
+
+                    if (errornombre == false) { //Si no encontro ninguna particion con el mismo nombre
+                        bool errorespacio = false; //booleano para saber si existe espacio disponible
+                        for (j = 0; j < totalparticiones && errorespacio == false; j++) {
+                            if (vecparticiones[j].part_type == 'e' || vecparticiones[j].part_type == 'E' && errorespacio == false) {
+                                struct_ebr auxnombres;
+                                int fin = vecparticiones[j].part_size + vecparticiones[j].part_start;
+                                bool ultima = false; //para saber si entro en la ultima particion
+                                for (i = vecparticiones[j].part_start; i < fin + 1 && errorespacio == false && ultima == false; i++) {
+                                    fseek(disco, i, SEEK_SET);
+                                    fread(&auxnombres, sizeof (struct_ebr), 1, disco);
+                                    if (auxnombres.part_next == -1) { //encontro la ultima
+                                        ultima = true;
+                                    }
+                                    i = auxnombres.part_next - 1;
+                                    contLogicas++;
+                                }
+                            }
+                        }
+                        int contposlogicas = 0;
+                        struct_ebr vecLogicas[contLogicas]; //vector donde se van a almacenar las logicas
+                        for (j = 0; j < totalparticiones; j++) {
+                            struct_ebr auxlogicas;
+                            if (vecparticiones[j].part_type == 'e' || vecparticiones[j].part_type == 'E') {
+                                int fin = vecparticiones[j].part_size + vecparticiones[j].part_start;
+                                bool ultima = false;
+                                for (i = vecparticiones[j].part_start; i < fin + 1 && ultima == false; i++) {
+                                    fseek(disco, i, SEEK_SET);
+                                    fread(&auxlogicas, sizeof (struct_ebr), 1, disco);
+                                    vecLogicas[contposlogicas] = auxlogicas;
+                                    if (auxlogicas.part_next == -1) {
+                                        ultima = true;
+                                    }
+                                    i = auxlogicas.part_next - 1;
+                                    contposlogicas++;
+                                }
+                            }
+                        }
+                        bool sientro = false;
+                        /*************************************************************/
+                        /*Recorriendo el vector de logicas para realizar la insercion*/
+                        /*************************************************************/
+                        j = 0;
+                        if (contLogicas > 1) {
+                            for (j = 0; j < contLogicas && sientro == false; j++) {
+                                if (j == (contLogicas - 1)) {//Comparando el espacio libre entre la ultima y el final de la extendida
+                                    espaciolibre = (auxExtendida.part_start + auxExtendida.part_size) - (vecLogicas[j].part_start + vecLogicas[j].part_size);
+                                    if (espaciolibre > tamanoreal) {
+                                        vecLogicas[j].part_next = vecLogicas[j].part_start + vecLogicas[j].part_size + 1;
+                                        ebr.part_fit = auxfit;
+                                        strcpy(ebr.part_name, name);
+                                        ebr.part_next = -1;
+                                        ebr.part_size = tamanoreal;
+                                        ebr.part_start = vecLogicas[j].part_start + vecLogicas[j].part_size + 1;
+                                        ebr.part_status = '1';
+                                        sientro = true;
+
+                                    }
+                                } else {
+                                    espaciolibre = (vecLogicas[j + 1].part_start) - (vecLogicas[j].part_start + vecLogicas[j].part_size + 1);
+                                    if (espaciolibre > tamanoreal) {
+                                        vecLogicas[j].part_next = vecLogicas[j].part_start + vecLogicas[j].part_size + 1;
+                                        ebr.part_fit = auxfit;
+                                        strcpy(ebr.part_name, name);
+                                        ebr.part_next = vecLogicas[j + 1].part_next;
+                                        ebr.part_size = tamanoreal;
+                                        ebr.part_start = vecLogicas[j].part_start + vecLogicas[j].part_size + 1;
+                                        ebr.part_status = '1';
+                                        sientro = true;
+                                    }
+                                }
+                            }
+                        } else {
+                            espaciolibre = (auxExtendida.part_start + auxExtendida.part_size) - (vecLogicas[j].part_start + vecLogicas[j].part_size);
+                            if (espaciolibre > tamanoreal) {
+                                vecLogicas[j].part_next = vecLogicas[j].part_start + vecLogicas[j].part_size + 1;
+                                ebr.part_fit = auxfit;
+                                strcpy(ebr.part_name, name);
+                                ebr.part_next = -1;
+                                ebr.part_size = tamanoreal;
+                                ebr.part_start = vecLogicas[j].part_start + vecLogicas[j].part_size + 1;
+                                ebr.part_status = '1';
+                                sientro = true;
+                            }
+                        }
+
+
+                        /********************************************************/
+                        /*Sobreescribiendo el disco despues de las validaciones*/
+                        /*******************************************************/
+                        if (sientro == true) { //Si encontro un espacio para la nueva particion
+                            nuevodisco = fopen(path, "rb+");
+                            fseek(nuevodisco, ebr.part_start, SEEK_SET);
+                            fwrite(&ebr, sizeof (struct_ebr), 1, nuevodisco);
+                            int x;
+                            for (x = 0; x < contLogicas; x++) {
+                                fseek(nuevodisco, vecLogicas[x].part_start, SEEK_SET);
+                                fwrite(&vecLogicas[x], sizeof (struct_ebr), 1, nuevodisco);
+                            }
+                            rewind(nuevodisco);
+                            fclose(nuevodisco);
+                            printf("Se creo la particion correctamente \n");
+                        } else {
+                            printf("No se encontro un espacio disponible para crear esta particion \n");
+                        }
+
+                    } else {
+                        printf("Ya existe una particion con ese nombre \n");
                     }
                 } else {
-                    printf("No se puede crear una particion logica debido a que no existe una particion extendida \n");
+                    printf("La particion que intenta crear sobrepasa el tamaño de la extendida \n");
                 }
+
+            } else {
+                printf("No se puede crear una particion logica debido a que no existe una particion extendida \n");
             }
-        } else { //Si el disco es nulo, no existe ese disco
-            printf("No existe el disco \n");
         }
+    } else { //Si el disco es nulo, no existe ese disco
+        printf("No existe el disco \n");
     }
 }
 
@@ -1865,10 +1871,10 @@ void Mount(Comando comando[]) {
                         x = 200;
                     }
                 }
-                cont--;
             } else {
                 strcpy(path, pathaux);
             }
+            cont--;
             existepath = true;
         } else if (strcasecmp(comando[cont].comando, "-name") == 0) {
             strcpy(auxname, comando[cont + 1].comando);
@@ -1901,12 +1907,20 @@ void Mount(Comando comando[]) {
         }
         cont++;
     }
-
-    if(existename == false && existepath == true){
-        printf("Error, falta parametro obligatorio [name] \n");
-    }else if(existename == true && existepath == false){
-        printf("Error, falta parametro obligatorio [path] \n");
-    }else if(existename == true && existepath == true){
+    if (existename == false || existepath == false) { //Si no viene path o name
+        printf("Lista de Montados Actualmente \n");
+        int x;
+        int y;
+        for (x = 0; x < 50; x++) {
+            if (strcasecmp(montados[x].path, "vacio") != 0){
+                for (y = 0; y < 26; y++) {
+                    if(montados[x].posicion[y].estado != 0){
+                        printf("id=%s     path=%s     name=%s \n",montados[x].posicion[y].id,montados[x].path,montados[x].posicion[y].nombre);
+                    }
+                }
+            }
+        }
+    } else if (existename == true || existepath == true){
         FILE *disco;
         struct_mbr mbr;
         char valornumero[5];
@@ -1929,6 +1943,7 @@ void Mount(Comando comando[]) {
                                 if (montados[x].posicion[y].estado == 0) {
                                     montados[x].posicion[y].estado = 1;
                                     strcpy(montados[x].posicion[y].nombre, name);
+
                                     time_t hora = time(0);
                                     struct tm *tlocal = localtime(&hora);
                                     strftime(montados[x].posicion[y].fecha_montado, 16, "%d/%m/%y %H:%S", tlocal);
@@ -1985,6 +2000,7 @@ void Mount(Comando comando[]) {
                                         if (montados[x].posicion[y].estado == 0) {
                                             montados[x].posicion[y].estado = 1;
                                             strcpy(montados[x].posicion[y].nombre, name);
+
                                             time_t hora = time(0);
                                             struct tm *tlocal = localtime(&hora);
                                             strftime(montados[x].posicion[y].fecha_montado, 16, "%d/%m/%y %H:%S", tlocal);
@@ -1993,6 +2009,7 @@ void Mount(Comando comando[]) {
                                             sprintf(valornumero, "%d", (y + 1));
                                             strcat(montados[x].posicion[y].id, valornumero);
                                             printf("SE MONTO:  %s \n\n", montados[x].posicion[y].id);
+
                                             y = 26;
                                             x = 50;
                                         }
@@ -2005,6 +2022,7 @@ void Mount(Comando comando[]) {
                                         if (montados[x].posicion[y].estado == 0) {
                                             montados[x].posicion[y].estado = 1;
                                             strcpy(montados[x].posicion[y].nombre, name);
+
                                             time_t hora = time(0);
                                             struct tm *tlocal = localtime(&hora);
                                             strftime(montados[x].posicion[y].fecha_montado, 16, "%d/%m/%y %H:%S", tlocal);
@@ -2013,6 +2031,7 @@ void Mount(Comando comando[]) {
                                             sprintf(valornumero, "%d", (y + 1));
                                             strcat(montados[x].posicion[y].id, valornumero);
                                             printf("SE MONTO: %s \n\n", montados[x].posicion[y].id);
+
                                             y = 26;
                                             x = 50;
                                         }
@@ -2031,24 +2050,11 @@ void Mount(Comando comando[]) {
                 printf("No existe una particion con ese nombre \n\n");
             }
         }
-    }else if(existename == false && existepath == false){
-        printf("Lista de Montados Actualmente \n");
-        int x;
-        int y;
-        for (x = 0; x < 50; x++) {
-            if (strcasecmp(montados[x].path, "vacio") != 0){
-                for (y = 0; y < 26; y++) {
-                    if(montados[x].posicion[y].estado != 0){
-                        printf("id=%s     path=%s     name=%s \n",montados[x].posicion[y].id,montados[x].path,montados[x].posicion[y].nombre);
-                    }
-                }
-            }
-        }
     }
 }
 
 void Umount(Comando comando[]){
-    int cont = 3;
+    int cont = 2;
     while (strcasecmp(comando[cont].comando, "vacio") != 0) {
         int x;
         int y;
@@ -2056,7 +2062,7 @@ void Umount(Comando comando[]){
         for (x = 0; x < 50; x++) {
             if (strcasecmp(montados[x].path, "vacio") != 0){
                 for (y = 0; y < 26; y++) {
-                    if(strcasecmp(montados[x].posicion[y].id,comando[cont].comando)==0 && montados[x].posicion[y].estado != 0){
+                    if(strcasecmp(montados[x].posicion[y].id, comando[cont].comando)==0 && montados[x].posicion[y].estado != 0){
                         montados[x].posicion[y].estado = 0;
                         limpiarvar(montados[x].posicion[y].id, 6);
                         limpiarvar(montados[x].posicion[y].nombre, 16);
@@ -2270,14 +2276,16 @@ void GenerarReporteMBR(char disco[], char archivosalida[]){
 }
 
 void GenerarReporteDisk(char nombreArchivo[], char nombreSalida[]) {
-    int fragmentacion;
+    int tam1, tam2, tam3, tam4;
+    int frag1, frag2, frag3, frag4, frag5;
+    struct_mbr mb;
     int count = 0; //cluster
     int contador = 0; //nodo
-    struct_mbr mb;
     char texto [10000];
     limpiarvar(texto, 10000);
-    FILE * ar; //dot
-    FILE * ardot; //disco
+    FILE * ar;
+    FILE * ardot;
+    VerificarPath(nombreSalida);
     ardot = fopen(nombreArchivo, "rb+");
     ar = fopen("/home/juande/Escritorio/disk.dot", "wt+");
     char str[15];
@@ -2323,94 +2331,566 @@ void GenerarReporteDisk(char nombreArchivo[], char nombreSalida[]) {
                 }
             }
         }
-        fprintf(ar, "digraph G {\n nodesep=.10;\n rankdir=BT;\n  node [shape=record];\n" );
-        fprintf(ar, "label=\"DISCO EXT2/EXT3 \";\n");
-        fprintf(ar, "\nsubgraph cluster%d {\n label=\"PARTICIONES\";\n",count);
+
+        strcpy(texto, "digraph G {\n nodesep=.10;\n rankdir=BT;\n  node [shape=record];\n");
+        strcat(texto, "label=\"DISCO FORMATO LWH\";\n");
+        strcat(texto, "\nsubgraph cluster");
+        sprintf(str, "%d", count);
+        strcat(texto, str);
         count++;
-        /****************************/
-        /***GRAFICANDO PARTICIONES***/
-        /****************************/
+        strcat(texto, "{\n");
+        strcat(texto, "label=\"PARTICIONES\";\n");
+        /******************************************************
+         *****************GRAFICANDO PARTICIONES**************
+         *****************************************************/
         int h;
         for (h = totalparticiones - 1; h >= 0; h--) {
-            if(h == totalparticiones - 1){
-                fragmentacion = mb.mbr_tamano - (vecparticiones[h].part_start + vecparticiones[h].part_size);
-                if(fragmentacion > 0){
-                    fprintf(ar,"node%d [label=\" <f0> LIBRE:\n %d \",height=1];\n",contador,fragmentacion);
+
+            if (h == 0) {
+                bool ultima = false;
+                tam1 = vecparticiones[h].part_start + vecparticiones[h].part_size;
+                //  printf("EL TAMANIO DEL BLOQUE PARTI1 ES:%d\n", tam1);
+                //SI ES LA ULTIMA PARTICION
+                frag1 = vecparticiones[h].part_start - (sizeof (struct_mbr) + 1);
+
+                if (totalparticiones == 1) {
+                    ultima = true;
+                    frag5 = mb.mbr_tamano - tam1;
+                    strcat(texto, "node");
+                    sprintf(str, "%d", contador);
+                    strcat(texto, str);
                     contador++;
-                }
-                fprintf(ar,"node%d [label=\" ",contador);
-                fprintf(ar,"<f0> NOMBRE: %s \n", vecparticiones[h].part_name);
-                fprintf(ar,"INICIO: %d \n", vecparticiones[h].part_start);
-                fprintf(ar,"TAMANO: %d \n", vecparticiones[h].part_size);
-                fprintf(ar,"TIPO: %c \" \n", vecparticiones[h].part_type);
-                fprintf(ar,",height=1];\n");
-                contador++;
-                if (vecparticiones[h].part_type == 'E' || vecparticiones[h].part_type == 'e') {
-                    struct_ebr veclogicas[50];
-                    int logic = 0;
-                    int j;
-                    struct_ebr ebr;
-                    fseek(ardot, vecparticiones[h].part_start, SEEK_SET);
-                    fread(&ebr, sizeof (struct_ebr), 1, ardot);
-                    j = 0;
-                    while (j < 50) {
-                        if (ebr.part_next == -1) {
-                            if (ebr.part_status == '1') {
-                                veclogicas[logic] = ebr;
-                                logic++;
-                            }
-                            break;
-                        }
-                        if (ebr.part_status == '1') {
-                            veclogicas[logic] = ebr;
-                            logic++;
+                    strcat(texto, "[label=\"");
+                    strcat(texto, "<f0>");
+                    strcat(texto, "LIBRE:\n");
+                    sprintf(str, "%d", frag5);
+                    strcat(texto, str);
+                    strcat(texto, "\",height=1];\n");
 
-                        }
-                        fseek(ardot, ebr.part_next, SEEK_SET);
-                        fread(&ebr, sizeof (struct_ebr), 1, ardot);
-                        j++;
-                    }
-                    fprintf(ar,"subgraph cluster_0 {\n rankdir = \"RL\";\n label = \"LOGICAS\";\n");
-                    fprintf(ar,"n_n[shape=\"box\",style=\"filled\",color=\"white\",label=\"\",width = 0.00001, heigth = 0.00001];\n");
-                    j = logic - 1;
-                    bool primera = false;
-                    int a = 100;
-                    while (logic > 0) {
-                        fprintf(ar,"n_%d_%d [shape=\"rectangle\",label=\"EB\"];\n",a,logic);
-                        a--;
-                        fprintf(ar,"n_%d_%d ",a,logic);
-                        a--;
-                        fprintf(ar,"[shape=\"rectangle\",label=\"NOMBRE:\n %s \n",veclogicas[logic].part_name);
-                        fprintf(ar,"TAMANO: %d \n", veclogicas[logic].part_size);
-                        fprintf(ar,"INICIO: %d \n", veclogicas[logic].part_start);
-                        fprintf(ar,"NEXT: %d \n", veclogicas[logic].part_next);
-                        fprintf(ar,"\"];\n");
-                        logic--;
-                    }
-                    fprintf(ar,"}\n");
                 }
 
-                if(totalparticiones == 1){
-                    fragmentacion = vecparticiones[h].part_start - (sizeof(struct_mbr)+ 1);
-                    if(fragmentacion> 0){
-                        fprintf(ar,"node%d [label=\" <f0> LIBRE:\n %d \",height=1];\n",contador,fragmentacion);
+                if (totalparticiones > 1) {
+                    frag2 = (vecparticiones[h + 1].part_start)-(tam1 + 1);
+                    if (frag2 > 0 && frag1 > 0 && ultima == false) {
+                        strcat(texto, "node");
+                        sprintf(str, "%d", contador);
+                        strcat(texto, str);
                         contador++;
+                        strcat(texto, "[label=\"");
+                        strcat(texto, "<f0>");
+                        strcat(texto, "LIBRE:\n");
+                        sprintf(str, "%d", frag1);
+                        strcat(texto, str);
+                        strcat(texto, "\",height=1];\n");
+                    } else {
+                        if (frag2 > 0) {
+                            strcat(texto, "node");
+                            sprintf(str, "%d", contador);
+                            strcat(texto, str);
+                            contador++;
+                            strcat(texto, "[label=\"");
+                            strcat(texto, "<f0>");
+                            strcat(texto, "LIBRE:\n");
+                            sprintf(str, "%d", frag2);
+                            strcat(texto, str);
+                            strcat(texto, "\",height=1];\n");
+                        }
                     }
                 }
-            }
-            else if(h == 0){
-                fragmentacion = vecparticiones[h+1].part_start - (vecparticiones[h].part_start+vecparticiones[h].part_size+1);
-                if(fragmentacion> 0){
-                    fprintf(ar,"node%d [label=\" <f0> LIBRE:\n %d \",height=1];\n",contador,fragmentacion);
-                    contador++;
-                }
-                fprintf(ar,"node%d [label=\" ",contador);
-                fprintf(ar,"<f0> NOMBRE: %s \n", vecparticiones[h].part_name);
-                fprintf(ar,"INICIO: %d \n", vecparticiones[h].part_start);
-                fprintf(ar,"TAMANO: %d \n", vecparticiones[h].part_size);
-                fprintf(ar,"TIPO: %c  \" \n", vecparticiones[h].part_type);
-                fprintf(ar,",height=1];\n");
+                strcat(texto, "node");
+                sprintf(str, "%d", contador);
+                strcat(texto, str);
                 contador++;
+                strcat(texto, "[label=\"");
+                strcat(texto, "<f0> NOMBRE:");
+                sprintf(str, "%s", vecparticiones[h].part_name);
+                strcat(texto, str);
+                strcat(texto, "\n INICIO:");
+                sprintf(str, "%d", vecparticiones[h].part_start);
+                strcat(texto, str);
+                strcat(texto, "\n TAMANO:");
+                sprintf(str, "%d", vecparticiones[h].part_size);
+                strcat(texto, str);
+                strcat(texto, "\n TIPO:");
+                sprintf(str, "%c", vecparticiones[h].part_type);
+                strcat(texto, str);
+                strcat(texto, "\",height=1];\n");
+
+                if (frag1 > 0) {
+                    strcat(texto, "node");
+                    sprintf(str, "%d", contador);
+                    strcat(texto, str);
+                    contador++;
+                    strcat(texto, "[label=\"");
+                    strcat(texto, "<f0>");
+                    strcat(texto, "LIBRE:\n");
+                    sprintf(str, "%d", frag1);
+                    strcat(texto, str);
+                    strcat(texto, "\",height=1];\n");
+                }
+
+                if (vecparticiones[h].part_type == 'E' || vecparticiones[h].part_type == 'e') {
+                    struct_ebr veclogicas[50];
+                    int logic = 0;
+                    int j;
+                    struct_ebr ebr;
+
+                    fseek(ardot, vecparticiones[h].part_start, SEEK_SET);
+                    fread(&ebr, sizeof (struct_ebr), 1, ardot);
+                    j = 0;
+                    while (j < 50) {
+                        if (ebr.part_next == -1) {
+                            if (ebr.part_status == '1') {
+                                veclogicas[logic] = ebr;
+                                logic++;
+                            }
+                            break;
+                        }
+                        if (ebr.part_status == '1') {
+                            veclogicas[logic] = ebr;
+                            logic++;
+
+                        }
+                        fseek(ardot, ebr.part_next, SEEK_SET);
+                        fread(&ebr, sizeof (struct_ebr), 1, ardot);
+                        j++;
+                    }
+
+
+                    strcat(texto, "subgraph cluster_0 {\n");
+                    strcat(texto, "rankdir = \"RL\";\n");
+                    strcat(texto, "label = \"PARTICIONES LOGICAS\";\n");
+                    strcat(texto, "n_n[shape=\"box\",style=\"filled\",color=\"white\",label=\"\",width = 0.00001, heigth = 0.00001];\n");
+
+                    j = logic - 1;
+                    bool primera = false;
+                    int a = 100;
+                    while (j >= 0) {
+                        if (primera == false) {
+                            strcat(texto, str);
+                            strcat(texto, "_");
+                            sprintf(str, "%d", j);
+                            strcat(texto, str);
+                            strcat(texto, "[shape=\"rectangle\",label=\"NOMBRE:\n");
+                            sprintf(str, "%s", veclogicas[j].part_name);
+                            strcat(texto, str);
+                            strcat(texto, "\n TAMANO:");
+                            sprintf(str, "%d", veclogicas[j].part_size);
+                            strcat(texto, str);
+                            strcat(texto, "\n INICIO:");
+                            sprintf(str, "%d", veclogicas[j].part_start);
+                            strcat(texto, str);
+                            strcat(texto, "\n NEXT:");
+                            sprintf(str, "%d", veclogicas[j].part_next);
+                            strcat(texto, str);
+                            strcat(texto, "\"];\n");
+                            strcat(texto, "n_");
+                            sprintf(str, "%d", a);
+                            a--;
+                            strcat(texto, str);
+                            strcat(texto, "_");
+                            sprintf(str, "%d", j);
+                            strcat(texto, str);
+                            strcat(texto, "[shape=\"rectangle\",label=\"EB\"];\n");
+                            primera = true;
+                        } else {
+                            strcat(texto, "n_");
+                            sprintf(str, "%d", a);
+                            a--;
+                            strcat(texto, str);
+                            strcat(texto, "_");
+                            sprintf(str, "%d", j);
+                            strcat(texto, str);
+                            strcat(texto, "[shape=\"rectangle\",label=\"NOMBRE:\n");
+                            sprintf(str, "%s", veclogicas[j].part_name);
+                            strcat(texto, str);
+                            strcat(texto, "\n TAMANO:");
+                            sprintf(str, "%d", veclogicas[j].part_size);
+                            strcat(texto, str);
+                            strcat(texto, "\n INICIO:");
+                            sprintf(str, "%d", veclogicas[j].part_start);
+                            strcat(texto, str);
+                            strcat(texto, "\n NEXT:");
+                            sprintf(str, "%d", veclogicas[j].part_next);
+                            strcat(texto, str);
+                            strcat(texto, "\"];\n");
+                            strcat(texto, "n_");
+                            sprintf(str, "%d", a);
+                            a--;
+                            strcat(texto, str);
+                            strcat(texto, "_");
+                            sprintf(str, "%d", j);
+                            strcat(texto, str);
+                            strcat(texto, "[shape=\"rectangle\",label=\"EBR\"];\n");
+                        }
+                        j--;
+                    }
+                    strcat(texto, "}\n");
+
+                }
+            } else if (h == 1) {
+                tam2 = vecparticiones[h].part_start + vecparticiones[h].part_size;
+                if (totalparticiones == 2) {
+                    frag5 = mb.mbr_tamano - tam2;
+                    strcat(texto, "node");
+                    sprintf(str, "%d", contador);
+                    strcat(texto, str);
+                    contador++;
+                    strcat(texto, "[label=\"");
+                    strcat(texto, "<f0>");
+                    strcat(texto, "LIBRE:\n");
+                    sprintf(str, "%d", frag5);
+                    strcat(texto, str);
+                    strcat(texto, "\",height=1];\n");
+
+                }
+
+
+                strcat(texto, "node");
+                sprintf(str, "%d", contador);
+                strcat(texto, str);
+                contador++;
+                strcat(texto, "[label=\"");
+                strcat(texto, "<f0> NOMBRE:");
+                sprintf(str, "%s", vecparticiones[h].part_name);
+                strcat(texto, str);
+                strcat(texto, "\n INICIO:");
+                sprintf(str, "%d", vecparticiones[h].part_start);
+                strcat(texto, str);
+                strcat(texto, "\n TAMANO:");
+                sprintf(str, "%d", vecparticiones[h].part_size);
+                strcat(texto, str);
+                strcat(texto, "\n TIPO:");
+                sprintf(str, "%c", vecparticiones[h].part_type);
+                strcat(texto, str);
+                strcat(texto, "\",height=1];\n");
+                frag3 = vecparticiones[h + 1].part_start - (tam2 + 1);
+                if (frag3 > 0) {
+                    strcat(texto, "node");
+                    sprintf(str, "%d", contador);
+                    strcat(texto, str);
+                    contador++;
+                    strcat(texto, "[label=\"");
+                    strcat(texto, "<f0>");
+                    strcat(texto, "LIBRE:\n");
+                    sprintf(str, "%d", frag3);
+                    strcat(texto, str);
+                    strcat(texto, "\",height=1];\n");
+
+                }
+                if (vecparticiones[h].part_type == 'E' || vecparticiones[h].part_type == 'e') {
+                    struct_ebr veclogicas[50];
+                    int logic = 0;
+                    int j;
+                    struct_ebr ebr;
+
+                    fseek(ardot, vecparticiones[h].part_start, SEEK_SET);
+                    fread(&ebr, sizeof (struct_ebr), 1, ardot);
+                    j = 0;
+                    while (j < 50) {
+                        if (ebr.part_next == -1) {
+                            if (ebr.part_status == '1') {
+                                veclogicas[logic] = ebr;
+                                logic++;
+                            }
+                            break;
+                        }
+                        if (ebr.part_status == '1') {
+                            veclogicas[logic] = ebr;
+                            logic++;
+
+                        }
+                        fseek(ardot, ebr.part_next, SEEK_SET);
+                        fread(&ebr, sizeof (struct_ebr), 1, ardot);
+                        j++;
+                    }
+
+
+                    strcat(texto, "subgraph cluster_0 {\n");
+                    strcat(texto, "rankdir = \"RL\";\n");
+                    strcat(texto, "label = \"LOGICAS\";\n");
+                    strcat(texto, "n_n[shape=\"box\",style=\"filled\",color=\"white\",label=\"\",width = 0.00001, heigth = 0.00001];\n");
+
+                    j = logic - 1;
+                    bool primera = false;
+                    int a = 100;
+                    while (j >= 0) {
+                        if (primera == false) {
+                            strcat(texto, "n_");
+                            sprintf(str, "%d", a);
+                            a--;
+                            strcat(texto, str);
+                            strcat(texto, "_");
+                            sprintf(str, "%d", j);
+                            strcat(texto, str);
+                            strcat(texto, "[shape=\"rectangle\",label=\"EB\"];\n");
+                            strcat(texto, "n_");
+                            sprintf(str, "%d", a);
+                            a--;
+                            strcat(texto, str);
+                            strcat(texto, "_");
+                            sprintf(str, "%d", j);
+                            strcat(texto, str);
+                            strcat(texto, "[shape=\"rectangle\",label=\"NOMBRE:\n");
+                            sprintf(str, "%s", veclogicas[j].part_name);
+                            strcat(texto, str);
+                            strcat(texto, "\n TAMANO:");
+                            sprintf(str, "%d", veclogicas[j].part_size);
+                            strcat(texto, str);
+                            strcat(texto, "\n INICIO:");
+                            sprintf(str, "%d", veclogicas[j].part_start);
+                            strcat(texto, str);
+                            strcat(texto, "\n NEXT:");
+                            sprintf(str, "%d", veclogicas[j].part_next);
+                            strcat(texto, str);
+                            strcat(texto, "\"];\n");
+                            strcat(texto, "n_");
+                            sprintf(str, "%d", a);
+                            a--;
+                            strcat(texto, str);
+                            strcat(texto, "_");
+                            sprintf(str, "%d", j);
+                            strcat(texto, str);
+                            strcat(texto, "[shape=\"rectangle\",label=\"EB\"];\n");
+                            primera = true;
+                        } else {
+                            strcat(texto, "n_");
+                            sprintf(str, "%d", a);
+                            a--;
+                            strcat(texto, str);
+                            strcat(texto, "_");
+                            sprintf(str, "%d", j);
+                            strcat(texto, str);
+                            strcat(texto, "[shape=\"rectangle\",label=\"NOMBRE:\n");
+                            sprintf(str, "%s", veclogicas[j].part_name);
+                            strcat(texto, str);
+                            strcat(texto, "\n TAMANO:");
+                            sprintf(str, "%d", veclogicas[j].part_size);
+                            strcat(texto, str);
+                            strcat(texto, "\n INICIO:");
+                            sprintf(str, "%d", veclogicas[j].part_start);
+                            strcat(texto, str);
+                            strcat(texto, "\n NEXT:");
+                            sprintf(str, "%d", veclogicas[j].part_next);
+                            strcat(texto, str);
+                            strcat(texto, "\"];\n");
+                            strcat(texto, "n_");
+                            sprintf(str, "%d", a);
+                            a--;
+                            strcat(texto, str);
+                            strcat(texto, "_");
+                            sprintf(str, "%d", j);
+                            strcat(texto, str);
+                            strcat(texto, "[shape=\"rectangle\",label=\"EB\"];\n");
+
+                        }
+                        j--;
+                    }
+
+
+                }
+
+            } else if (h == 2) {
+                tam3 = vecparticiones[h].part_start + vecparticiones[h].part_size;
+                if (totalparticiones == 3) {
+                    frag5 = mb.mbr_tamano - tam3;
+                    ;
+                    strcat(texto, "node");
+                    sprintf(str, "%d", contador);
+                    strcat(texto, str);
+                    contador++;
+                    strcat(texto, "[label=\"");
+                    strcat(texto, "<f0>");
+                    strcat(texto, "LIBRE:\n");
+                    sprintf(str, "%d", frag5);
+                    strcat(texto, str);
+                    strcat(texto, "\",height=1];\n");
+                    frag4 = 0;
+                } else {
+                    frag4 = vecparticiones[h + 1].part_start - (tam3 + 1);
+                }
+
+                strcat(texto, "node");
+                sprintf(str, "%d", contador);
+                strcat(texto, str);
+                contador++;
+                strcat(texto, "[label=\"");
+                strcat(texto, "<f0> NOMBRE:");
+                sprintf(str, "%s", vecparticiones[h].part_name);
+                strcat(texto, str);
+                strcat(texto, "\n INICIO:");
+                sprintf(str, "%d", vecparticiones[h].part_start);
+                strcat(texto, str);
+                strcat(texto, "\n TAMANO:");
+                sprintf(str, "%d", vecparticiones[h].part_size);
+                strcat(texto, str);
+                strcat(texto, "\n TIPO:");
+                sprintf(str, "%c", vecparticiones[h].part_type);
+                strcat(texto, str);
+                strcat(texto, "\",height=1];\n");
+
+                if (frag4 > 0) {
+                    strcat(texto, "node");
+                    sprintf(str, "%d", contador);
+                    strcat(texto, str);
+                    contador++;
+                    strcat(texto, "[label=\"");
+                    strcat(texto, "<f0>");
+                    strcat(texto, "LIBRE:\n");
+                    sprintf(str, "%d", frag4);
+                    strcat(texto, str);
+                    strcat(texto, "\",height=1];\n");
+
+                }
+                if (vecparticiones[h].part_type == 'E' || vecparticiones[h].part_type == 'e') {
+                    struct_ebr veclogicas[50];
+                    int logic = 0;
+                    int j;
+                    struct_ebr ebr;
+
+                    fseek(ardot, vecparticiones[h].part_start, SEEK_SET);
+                    fread(&ebr, sizeof (struct_ebr), 1, ardot);
+                    j = 0;
+                    while (j < 50) {
+                        if (ebr.part_next == -1) {
+                            if (ebr.part_status == '1') {
+                                veclogicas[logic] = ebr;
+                                logic++;
+                            }
+                            break;
+                        }
+                        if (ebr.part_status == '1') {
+                            veclogicas[logic] = ebr;
+                            logic++;
+
+                        }
+                        fseek(ardot, ebr.part_next, SEEK_SET);
+                        fread(&ebr, sizeof (struct_ebr), 1, ardot);
+                        j++;
+                    }
+
+
+                    strcat(texto, "subgraph cluster_0 {\n");
+                    strcat(texto, "rankdir = \"RL\";\n");
+                    strcat(texto, "label = \"LOGICAS\";\n");
+                    strcat(texto, "n_n[shape=\"box\",style=\"filled\",color=\"white\",label=\"\",width = 0.00001, heigth = 0.00001];\n");
+
+                    j = logic - 1;
+                    bool primera = false;
+                    int a = 100;
+                    while (j >= 0) {
+                        if (primera == false) {
+                            strcat(texto, "n_");
+                            sprintf(str, "%d", a);
+                            a--;
+                            strcat(texto, str);
+                            strcat(texto, "_");
+                            sprintf(str, "%d", j);
+                            strcat(texto, str);
+                            strcat(texto, "[shape=\"rectangle\",label=\"EB\"];\n");
+                            strcat(texto, "n_");
+                            sprintf(str, "%d", a);
+                            a--;
+                            strcat(texto, str);
+                            strcat(texto, "_");
+                            sprintf(str, "%d", j);
+                            strcat(texto, str);
+                            strcat(texto, "[shape=\"rectangle\",label=\"NOMBRE:\n");
+                            sprintf(str, "%s", veclogicas[j].part_name);
+                            strcat(texto, str);
+                            strcat(texto, "\n TAMANO:");
+                            sprintf(str, "%d", veclogicas[j].part_size);
+                            strcat(texto, str);
+                            strcat(texto, "\n INICIO:");
+                            sprintf(str, "%d", veclogicas[j].part_start);
+                            strcat(texto, str);
+                            strcat(texto, "\n NEXT:");
+                            sprintf(str, "%d", veclogicas[j].part_next);
+                            strcat(texto, str);
+                            strcat(texto, "\"];\n");
+                            strcat(texto, "n_");
+                            sprintf(str, "%d", a);
+                            a--;
+                            strcat(texto, str);
+                            strcat(texto, "_");
+                            sprintf(str, "%d", j);
+                            strcat(texto, str);
+                            strcat(texto, "[shape=\"rectangle\",label=\"EB\"];\n");
+                            primera = true;
+                        } else {
+                            strcat(texto, "n_");
+                            sprintf(str, "%d", a);
+                            a--;
+                            strcat(texto, str);
+                            strcat(texto, "_");
+                            sprintf(str, "%d", j);
+                            strcat(texto, str);
+                            strcat(texto, "[shape=\"rectangle\",label=\"NOMBRE:\n");
+                            sprintf(str, "%s", veclogicas[j].part_name);
+                            strcat(texto, str);
+                            strcat(texto, "\n TAMANO:");
+                            sprintf(str, "%d", veclogicas[j].part_size);
+                            strcat(texto, str);
+                            strcat(texto, "\n INICIO:");
+                            sprintf(str, "%d", veclogicas[j].part_start);
+                            strcat(texto, str);
+                            strcat(texto, "\n NEXT:");
+                            sprintf(str, "%d", veclogicas[j].part_next);
+                            strcat(texto, str);
+                            strcat(texto, "\"];\n");
+                            strcat(texto, "n_");
+                            sprintf(str, "%d", a);
+                            a--;
+                            strcat(texto, str);
+                            strcat(texto, "_");
+                            sprintf(str, "%d", j);
+                            strcat(texto, str);
+                            strcat(texto, "[shape=\"rectangle\",label=\"EB\"];\n");
+
+                        }
+                        j--;
+                    }
+                    strcat(texto, "}\n");
+
+                }
+
+            } else if (h == 3) {
+                tam4 = vecparticiones[h].part_start + vecparticiones[h].part_size;
+                frag5 = mb.mbr_tamano - tam4;
+                if (totalparticiones == 4) {
+                    if (frag5 > 0) {
+                        strcat(texto, "node");
+                        sprintf(str, "%d", contador);
+                        strcat(texto, str);
+                        contador++;
+                        strcat(texto, "[label=\"");
+                        strcat(texto, "<f0>");
+                        strcat(texto, "LIBRE:\n");
+                        sprintf(str, "%d", frag5);
+                        strcat(texto, str);
+                        strcat(texto, "\",height=1];\n");
+                    }
+
+                }
+                strcat(texto, "node");
+                sprintf(str, "%d", contador);
+                strcat(texto, str);
+                contador++;
+                strcat(texto, "[label=\"");
+                strcat(texto, "<f0> NOMBRE:");
+                sprintf(str, "%s", vecparticiones[h].part_name);
+                strcat(texto, str);
+                strcat(texto, "\n INICIO:");
+                sprintf(str, "%d", vecparticiones[h].part_start);
+                strcat(texto, str);
+                strcat(texto, "\n TAMANO:");
+                sprintf(str, "%d", vecparticiones[h].part_size);
+                strcat(texto, str);
+                strcat(texto, "\n TIPO:");
+                sprintf(str, "%c", vecparticiones[h].part_type);
+                strcat(texto, str);
+                strcat(texto, "\",height=1];\n");
+
                 if (vecparticiones[h].part_type == 'E' || vecparticiones[h].part_type == 'e') {
                     struct_ebr veclogicas[50];
                     int logic = 0;
@@ -2436,67 +2916,130 @@ void GenerarReporteDisk(char nombreArchivo[], char nombreSalida[]) {
                         fread(&ebr, sizeof (struct_ebr), 1, ardot);
                         j++;
                     }
-                    fprintf(ar,"subgraph cluster_0 {\n rankdir = \"RL\";\n label = \"LOGICAS\";\n");
-                    fprintf(ar,"n_n[shape=\"box\",style=\"filled\",color=\"white\",label=\"\",width = 0.00001, heigth = 0.00001];\n");
+
+
+                    strcat(texto, "subgraph cluster_0 {\n");
+                    strcat(texto, "rankdir = \"RL\";\n");
+                    strcat(texto, "label = \"LOGICAS\";\n");
+                    strcat(texto, "n_n[shape=\"box\",style=\"filled\",color=\"white\",label=\"\",width = 0.00001, heigth = 0.00001];\n");
+
                     j = logic - 1;
                     bool primera = false;
                     int a = 100;
-                    while (logic > 0) {
-                        fprintf(ar,"n_%d_%d [shape=\"rectangle\",label=\"EB\"];\n",a,logic);
-                        a--;
-                        fprintf(ar,"n_%d_%d ",a,logic);
-                        a--;
-                        fprintf(ar,"[shape=\"rectangle\",label=\"NOMBRE:\n %s \n",veclogicas[logic].part_name);
-                        fprintf(ar,"TAMANO: %d \n", veclogicas[logic].part_size);
-                        fprintf(ar,"INICIO: %d \n", veclogicas[logic].part_start);
-                        fprintf(ar,"NEXT: %d \n", veclogicas[logic].part_next);
-                        fprintf(ar,"\"];\n");
-                        logic--;
+                    while (j >= 0) {
+                        if (primera == false) {
+                            strcat(texto, "n_");
+                            sprintf(str, "%d", a);
+                            a--;
+                            strcat(texto, str);
+                            strcat(texto, "_");
+                            sprintf(str, "%d", j);
+                            strcat(texto, str);
+                            strcat(texto, "[shape=\"rectangle\",label=\"EB\"];\n");
+                            strcat(texto, "n_");
+                            sprintf(str, "%d", a);
+                            a--;
+                            strcat(texto, str);
+                            strcat(texto, "_");
+                            sprintf(str, "%d", j);
+                            strcat(texto, str);
+                            strcat(texto, "[shape=\"rectangle\",label=\"NOMBRE:\n");
+                            sprintf(str, "%s", veclogicas[j].part_name);
+                            strcat(texto, str);
+                            strcat(texto, "\n TAMANO:");
+                            sprintf(str, "%d", veclogicas[j].part_size);
+                            strcat(texto, str);
+                            strcat(texto, "\n INICIO:");
+                            sprintf(str, "%d", veclogicas[j].part_start);
+                            strcat(texto, str);
+                            strcat(texto, "\n NEXT:");
+                            sprintf(str, "%d", veclogicas[j].part_next);
+                            strcat(texto, str);
+                            strcat(texto, "\"];\n");
+                            strcat(texto, "n_");
+                            sprintf(str, "%d", a);
+                            a--;
+                            strcat(texto, str);
+                            strcat(texto, "_");
+                            sprintf(str, "%d", j);
+                            strcat(texto, str);
+                            strcat(texto, "[shape=\"rectangle\",label=\"EB\"];\n");
+                            primera = true;
+                        } else {
+                            strcat(texto, "n_");
+                            sprintf(str, "%d", a);
+                            a--;
+                            strcat(texto, str);
+                            strcat(texto, "_");
+                            sprintf(str, "%d", j);
+                            strcat(texto, str);
+                            strcat(texto, "[shape=\"rectangle\",label=\"NOMBRE:\n");
+                            sprintf(str, "%s", veclogicas[j].part_name);
+                            strcat(texto, str);
+                            strcat(texto, "\n TAMANO:");
+                            sprintf(str, "%d", veclogicas[j].part_size);
+                            strcat(texto, str);
+                            strcat(texto, "\n INICIO:");
+                            sprintf(str, "%d", veclogicas[j].part_start);
+                            strcat(texto, str);
+                            strcat(texto, "\n NEXT:");
+                            sprintf(str, "%d", veclogicas[j].part_next);
+                            strcat(texto, str);
+                            strcat(texto, "\"];\n");
+                            strcat(texto, "n_");
+                            sprintf(str, "%d", a);
+                            a--;
+                            strcat(texto, str);
+                            strcat(texto, "_");
+                            sprintf(str, "%d", j);
+                            strcat(texto, str);
+                            strcat(texto, "[shape=\"rectangle\",label=\"EB\"];\n");
+
+                        }
+                        j--;
                     }
-                    fprintf(ar,"}\n");
-                }
-                fragmentacion = vecparticiones[h].part_start - (sizeof(struct_mbr)+ 1);
-                if(fragmentacion> 0){
-                    fprintf(ar,"node%d [label=\" <f0> LIBRE:\n %d \",height=1];\n",contador,fragmentacion);
-                    contador++;
+                    strcat(texto, "}\n");
+
                 }
             }
-            else{
-                fragmentacion = vecparticiones[h+1].part_start - (vecparticiones[h].part_start + vecparticiones[h].part_size + 1);
-                if(fragmentacion > 0){
-                    fprintf(ar,"node%d [label=\" <f0> LIBRE:\n %d \",height=1];\n",contador,fragmentacion);
-                    contador++;
-                }
-                fprintf(ar,"node%d [label=\" ",contador);
-                fprintf(ar,"<f0> NOMBRE: %s \n", vecparticiones[h].part_name);
-                fprintf(ar,"INICIO: %d \n", vecparticiones[h].part_start);
-                fprintf(ar,"TAMANO: %d \n", vecparticiones[h].part_size);
-                fprintf(ar,"TIPO: %c \" \n", vecparticiones[h].part_type);
-                contador++;
-                fprintf(ar,",height=1];\n");
-            }
+
         }
-        fprintf(ar, "node%d [label=\"<f0> MBR\n  ",contador);
+        strcat(texto, "node");
+        sprintf(str, "%d", contador);
+        strcat(texto, str);
         contador++;
-        fprintf(ar, "ID: %d \n", mb.mbr_disk_signature);
-        fprintf(ar, "TAMANO: %d \n", mb.mbr_tamano);
-        fprintf(ar, "FECHA: %s \n", mb.mbr_fecha_creacion);
-        fprintf(ar,"\", height=1]; \n} \n}");
+        strcat(texto, "[label=\"<f0> MBR\n  ID:");
+        sprintf(str, "%d", mb.mbr_disk_signature);
+        strcat(texto, str);
+        strcat(texto, "\nTAMANO:");
+        sprintf(str, "%d", mb.mbr_tamano);
+        strcat(texto, str);
+        strcat(texto, "\nFECHA:");
+        strcat(texto, ("%s", mb.mbr_fecha_creacion));
+        strcat(texto, "\", height=1];");
+
+        strcat(texto, "\n}");
+        strcat(texto, "\n}");
+        fwrite(texto, sizeof (char)*strlen(texto), 1, ar);
         fclose(ar);
+
+
+    } else {
+
+        printf("No existe disco\n");
     }
+
+    char id[5];
+    sprintf(id, "%d", mb.mbr_disk_signature);
     char cmd [200];
-    char cmd2 [200];
     char aux[100];
     limpiarvar(aux, 100);
     limpiarvar(cmd, 200);
-    limpiarvar(cmd2, 200);
     strcat(aux, nombreSalida);
-    strcpy(cmd2,"gpicview /home/juande/Escritorio/disco1.jpg ");
-    strcat(cmd2,aux);
     strcpy(cmd, "dot -Tjpg /home/juande/Escritorio/disk.dot -o ");
     strcat(cmd, aux);
+    //  printf("%s",cmd);
     system(cmd);
-    system(cmd2);
 }
 
 void Exec(Comando comando[]){ //METODO DONDE SE LEE EL ARCHIVO PARA EJECUTAR LAS INSTRUCCIONES EN OTRO METODO
@@ -2506,10 +3049,9 @@ void Exec(Comando comando[]){ //METODO DONDE SE LEE EL ARCHIVO PARA EJECUTAR LAS
     char comandaux[200];
     int contcomando = 0;
     limpiarvar(comandaux, 200);
-    strcpy(comandaux, comando[1].comando);
-
+    strcpy(comandaux, comando[2].comando);
     if (comandaux[0] == '\"') {
-        int x = 2;
+        int x = 3;
         while (strcasecmp(comando[x].comando, "vacio") != 0) {
             strcat(comandaux, " ");
             strcat(comandaux, comando[x].comando);
@@ -2518,7 +3060,6 @@ void Exec(Comando comando[]){ //METODO DONDE SE LEE EL ARCHIVO PARA EJECUTAR LAS
         int i;
         for (i = 1; i < 200; i++) {
             if (comandaux[i] != '\"') {
-
                 comand[contcomando] = comandaux[i];
                 contcomando++;
             } else {
@@ -2529,20 +3070,118 @@ void Exec(Comando comando[]){ //METODO DONDE SE LEE EL ARCHIVO PARA EJECUTAR LAS
         strcpy(comand, comandaux);
     }
     ar = fopen(comand, "rb+");
+    limpiarvar(comand,200);
     if (ar != NULL) {
         while (fgets(comand, 200, ar) != NULL) {
-            printf("\n%s", comand);
+            cambio(comand);
+            char auxcadena[200];
+            limpiarvar(auxcadena,200);
+            int fin = strlen(comand)-1;
+            int asci = comand[fin];
+            if(comand[fin] == '\\'){
+                comand[fin+2] = '\0';
+                comand[fin+1] = '\0';
+                comand[fin] = '\0';
+                fgets(auxcadena, 200, ar);
+                cambio(auxcadena);
+                strcat(comand,auxcadena);
+            }
             if (comand[0] == '#') {
                 printf("Comentario: %s \n", comand);
-            } else if (comand[0] == '\n') {
-
-            } else {
-                //EjecutarScript(comand);
+                limpiarvar(comand,200);
+            }else {
+                printf("\n%s \n", comand);
+                EjecutarScript(comand);
+                limpiarvar(comand,200);
             }
         }
         fclose(ar);
     } else {
         printf("LA RUTA NO EXISTE\n\n");
+    }
+
+}
+
+void EjecutarScript(char instruccion[]){ //METODO DONDE SE EJECUTAN LOS SCRIPT DEL EXEC
+    int i;
+    for (i = 0; i < 25; i++) {
+        limpiarvar(Comandos[i].comando,100);
+        strcpy(Comandos[i].comando, "VACIO");
+    }
+    int count = 0;
+    char comando[200]; //variable donde se ira guardando cada linea de comando
+    limpiarvar(comando, 200);
+    strcpy(comando,instruccion);
+    /*char** tokens, tokens2;
+    char comando[200]; //variable donde se ira guardando cada linea de comando
+    limpiarvar(comando, 200);
+    strcpy(comando,instruccion);
+    char * completo;
+    char** variables;
+    char * completo2;
+    char** ssplit; //segundo split con :
+    int count = 0;
+    tokens = SplitComando(comando, ' '); //separando el comando por espacios en blanco
+    if (tokens) {
+        int i;
+        for (i = 0; *(tokens + i); i++){
+            completo = *(tokens + i);
+            variables = SplitComando(completo, ':');
+            if (variables) {
+                int j;
+                for (j = 0; *(variables + j); j++) {
+                    completo2 = *(variables + j);
+                    ssplit = SplitComando(completo2, ':');
+                    if(ssplit){
+                        int k;
+                        for (k = 0; *(ssplit + k); k++) {
+                            char * valor = *(ssplit + k);
+                            strcpy(comando,valor);
+                            strcpy(Comandos[count].comando,valor);
+                            count++;
+                        }
+                        free(ssplit);
+                    }
+                }
+                free(variables);
+            }
+        }
+        free(tokens);
+    }*/
+    char* token;
+    token = strtok(comando, " ");
+    while (token != NULL)
+    {
+        strcpy(Comandos[count].comando, token);
+        count++;
+        token = strtok(NULL, " ::");
+    }
+
+    if (strcasecmp(Comandos[0].comando, "mkdisk") == 0) {
+        printf("CREACION DE DISCO DURO\n");
+        Mkdisk(Comandos);
+    } else if (strcasecmp(Comandos[0].comando, "rmdisk") == 0) {
+        printf("ELIMINACION DE DISCO DURO\n");
+        Rmdisk(Comandos);
+    } else if (strcasecmp(Comandos[0].comando, "fdisk") == 0) {
+        printf("MODIFICACION DE PARTICION\n");
+        Fdisk(Comandos);
+    } else if (strcasecmp(Comandos[0].comando, "exec") == 0) {
+        printf("SE LEERA UN ARCHIVO\n");
+        //exec(primero->siguiente);
+    } else if (strcasecmp(Comandos[0].comando, "mount") == 0) {
+        printf("MONTAR PARTICION\n");
+        Mount(Comandos);
+    } else if (strcasecmp(Comandos[0].comando, "umount") == 0) {
+        printf("DESMONTAR PARTICION\n");
+        Umount(Comandos);
+    } else if (strcasecmp(Comandos[0].comando, "rep") == 0) {
+        printf("SE GENERARA UN REPORTE\n");
+        Reporte(Comandos);
+    } else if (Comandos[0].comando[0] == '#') {
+        printf("COMENTARIO\n");
+    }else {
+        printf("COMANDO INVALIDO\n");
     }
 
 }
