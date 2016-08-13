@@ -2049,6 +2049,8 @@ void Mount(Comando comando[]) {
             if (encontrada == false) {
                 printf("No existe una particion con ese nombre \n\n");
             }
+        }else{
+            printf("No existe Disco con ese nombre \n");
         }
     }
 }
@@ -3193,7 +3195,6 @@ void InicializarMontados() {
         limpiarvar(montados[i].path, 200);
         strcpy(montados[i].path, "vacio");
         for (j = 0; j < 26; j++) {
-
             montados[i].posicion[j].estado = 0;
             limpiarvar(montados[i].posicion[j].id, 6);
             limpiarvar(montados[i].posicion[j].nombre, 16);
